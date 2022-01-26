@@ -1049,6 +1049,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     // signature ok
                                     if (valid) {
                                         step = 5;
+                                        payload.putString("messageError", 'check ok');
                                         sendEvent("NfcManagerDiscoverTag", nfcTag);
                                         nfcAdapter.disableReaderMode(currentActivity);
                                     } else {
@@ -1099,6 +1100,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                         step = 4;
                                         ndfMessage = new String(userData, "UTF-8");
                                         nfcTag.putString("ndfMessage", ndfMessage);
+                                        payload.putString("messageError", 'check ok');
                                         sendEvent("NfcOriginalChecked", nfcTag);
                                         nfcAdapter.disableReaderMode(currentActivity);
                                     }else{
@@ -1118,6 +1120,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 //                                    Thread.sleep(sleep_time);
                                     step = 4;
                                     ndfMessage = new String(userData, "UTF-8");
+                                    payload.putString("messageError", 'check ok');
                                     nfcTag.putString("ndfMessage", ndfMessage);
                                     sendEvent("NfcOriginalChecked", nfcTag);
                                     nfcAdapter.disableReaderMode(currentActivity);
