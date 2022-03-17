@@ -1,5 +1,7 @@
 package community.revteltech.nfc;
 
+import static android.nfc.NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK;
+
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -54,7 +56,10 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     private Tag tag = null;
     // Use NFC reader mode instead of listening to a dispatch
     private Boolean isReaderModeEnabled = false;
+    private Boolean enableReadNFC = false;
     private int readerModeFlags = 0;
+    private NfcAdapter nfcAdapter = null;
+    private Activity currentActivity = null;
 
     class WriteNdefRequest {
         NdefMessage message;
@@ -579,27 +584,27 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     @ReactMethod
     public void connect(ReadableArray techs, Callback callback){
         synchronized(this) {
-          try {
-            techRequest = new TagTechnologyRequest(techs.toArrayList(), callback);
-            techRequest.connect(this.tag);
-            callback.invoke(null, null);
-            return;
-          } catch (Exception ex) {
-              callback.invoke(ex.toString());
-          }
+            try {
+                techRequest = new TagTechnologyRequest(techs.toArrayList(), callback);
+                techRequest.connect(this.tag);
+                callback.invoke(null, null);
+                return;
+            } catch (Exception ex) {
+                callback.invoke(ex.toString());
+            }
         }
     }
 
     @ReactMethod
     public void close(Callback callback){
         synchronized(this) {
-          try {
-            techRequest.close();
-            callback.invoke(null, null);
-            return;
-          } catch (Exception ex) {
-            callback.invoke(ex.toString());
-          }
+            try {
+                techRequest.close();
+                callback.invoke(null, null);
+                return;
+            } catch (Exception ex) {
+                callback.invoke(ex.toString());
+            }
         }
     }
 
@@ -1009,10 +1014,14 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
     @ReactMethod
     private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, Callback callback) {
-        final NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(context);
-        final Activity currentActivity = getCurrentActivity();
-        final NfcManager manager = this;
+        if(this.enableReadNFC){
+            this.nfcAdapter.disableReaderMode(currentActivity);
+            this.enableReadNFC = false;
+        }
+        this.nfcAdapter = NfcAdapter.getDefaultAdapter(context);
+        this.currentActivity = getCurrentActivity();
         if (nfcAdapter != null && currentActivity != null && !currentActivity.isFinishing()) {
+            final NfcManager manager = this;
             try {
                 if (publicKey.isEmpty()) {
                     sendEvent("NfcOriginalCheckError", null);
@@ -1023,6 +1032,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                 Log.i(LOG_TAG, "enableReaderMode");
                 Bundle readerModeExtras = new Bundle();
                 readerModeExtras.putInt(NfcAdapter.EXTRA_READER_PRESENCE_CHECK_DELAY, 10000);
+                enableReadNFC = true;
                 nfcAdapter.enableReaderMode(currentActivity, new NfcAdapter.ReaderCallback() {
                     @Override
                     public void onTagDiscovered(Tag tag) {
@@ -1049,25 +1059,20 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     // signature ok
                                     if (valid) {
                                         step = 5;
-                                        payload.putString("messageError", 'check ok');
                                         sendEvent("NfcManagerDiscoverTag", nfcTag);
-                                        nfcAdapter.disableReaderMode(currentActivity);
                                     } else {
                                         WritableMap payload = Arguments.createMap();
                                         payload.putString("signature", Ev1SignatureCheck.signatureNFC);
                                         payload.putString("messageError", Ev1SignatureCheck.message);
                                         sendEvent("NfcOriginalCheckError", payload);
-                                        nfcAdapter.disableReaderMode(currentActivity);
                                     }
                                     isoDep.close();
                                 } catch (IOException e) {
                                     WritableMap payload = Arguments.createMap();
                                     payload.putString("messageError", e.getMessage());
                                     sendEvent("NfcOriginalCheckError", payload);
-                                    nfcAdapter.disableReaderMode(currentActivity);
                                 } finally {
                                     Log.w(LOG_TAG, "step: " + step);
-                                    nfcAdapter.disableReaderMode(currentActivity);
                                 }
                             }
                             return;
@@ -1076,7 +1081,6 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             WritableMap payload = Arguments.createMap();
                             payload.putString("messageError", bytesToHex(tag.getId()).toUpperCase());
                             sendEvent("NfcOriginalCheckError", payload);
-                            nfcAdapter.disableReaderMode(currentActivity);
                         }
                         MifareUltralight isoDep = MifareUltralight.get(tag);
                         if (isoDep != null) {
@@ -1085,7 +1089,6 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                 isoDep.connect();
                                 // case 1 checking password
                                 if(!password.isEmpty()) {
-//                                    Thread.sleep(sleep_time);
                                     // unlock with password
                                     byte[] responseCheckPass1 = isoDep.transceive(new byte[]{
                                             (byte) 0x1B, // PWD_AUTH
@@ -1100,14 +1103,11 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                         step = 4;
                                         ndfMessage = new String(userData, "UTF-8");
                                         nfcTag.putString("ndfMessage", ndfMessage);
-                                        payload.putString("messageError", 'check ok');
                                         sendEvent("NfcOriginalChecked", nfcTag);
-                                        nfcAdapter.disableReaderMode(currentActivity);
                                     }else{
                                         WritableMap payload = Arguments.createMap();
                                         payload.putString("messageError", password);
                                         sendEvent("NfcOriginalCheckError", payload);
-                                        nfcAdapter.disableReaderMode(currentActivity);
                                     }
 
                                 }else{
@@ -1117,35 +1117,29 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                             (byte) 0x06,// start page address
                                             (byte) 0x31// end page address
                                     });
-//                                    Thread.sleep(sleep_time);
                                     step = 4;
                                     ndfMessage = new String(userData, "UTF-8");
-                                    payload.putString("messageError", 'check ok');
                                     nfcTag.putString("ndfMessage", ndfMessage);
                                     sendEvent("NfcOriginalChecked", nfcTag);
-                                    nfcAdapter.disableReaderMode(currentActivity);
+//                                    nfcAdapter.disableReaderMode(currentActivity);
                                 }
                                 isoDep.close();
                             } catch (IOException e) {
                                 WritableMap payload = Arguments.createMap();
                                 payload.putString("messageError", e.getMessage());
                                 sendEvent("NfcOriginalCheckError", payload);
-                                nfcAdapter.disableReaderMode(currentActivity);
                             }finally {
                                 Log.w(LOG_TAG, "step: " + step);
-                                nfcAdapter.disableReaderMode(currentActivity);
                             }
                         } else {
                             WritableMap payload = Arguments.createMap();
                             payload.putString("messageError", "Cannot find device");
                             sendEvent("NfcOriginalCheckError", payload);
-                            nfcAdapter.disableReaderMode(currentActivity);
                         }
                     }
                 }, NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B, readerModeExtras);
             } catch (IllegalStateException | NullPointerException e) {
                 Log.w(LOG_TAG, "Illegal State Exception starting NFC. Assuming application is terminating.");
-                nfcAdapter.disableReaderMode(currentActivity);
             }
         }
     }
