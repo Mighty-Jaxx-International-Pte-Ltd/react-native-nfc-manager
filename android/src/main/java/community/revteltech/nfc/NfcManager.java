@@ -1059,7 +1059,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     // signature ok
                                     if (valid) {
                                         step = 5;
-                                        nfcTag.putString("messageError", 'found chip');
+                                        nfcTag.putString("messageError", "found chip");
                                         sendEvent("NfcManagerDiscoverTag", nfcTag);
                                     } else {
                                         nfcTag.putString("signature", Ev1SignatureCheck.signatureNFC);
@@ -1077,7 +1077,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             return;
                         }
                         if(!bytesToHex(tag.getId()).toUpperCase().equals(udid.toUpperCase())){
-                            nfcTag.putString("messageError", 'udid is not correct:' + bytesToHex(tag.getId()).toUpperCase());
+                            nfcTag.putString("messageError", "udid is not correct:" + bytesToHex(tag.getId()).toUpperCase());
                             sendEvent("NfcOriginalCheckError", nfcTag);
                         }
                         MifareUltralight isoDep = MifareUltralight.get(tag);
@@ -1101,10 +1101,10 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                         step = 4;
                                         ndfMessage = new String(userData, "UTF-8");
                                         nfcTag.putString("ndfMessage", ndfMessage);
-                                        nfcTag.putString("messageError", 'success');
+                                        nfcTag.putString("messageError", "success");
                                         sendEvent("NfcOriginalChecked", nfcTag);
                                     }else{
-                                        nfcTag.putString("messageError", 'error password: ' +  password);
+                                        nfcTag.putString("messageError", "error password: " +  password);
                                         sendEvent("NfcOriginalCheckError", nfcTag);
                                     }
 
@@ -1118,7 +1118,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     step = 4;
                                     ndfMessage = new String(userData, "UTF-8");
                                     nfcTag.putString("ndfMessage", ndfMessage);
-                                    nfcTag.putString("messageError", 'success');
+                                    nfcTag.putString("messageError", "success");
                                     sendEvent("NfcOriginalChecked", nfcTag);
                                 }
                                 isoDep.close();
