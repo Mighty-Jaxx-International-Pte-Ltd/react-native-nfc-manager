@@ -1041,7 +1041,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                         int step = 0;
                         String ndfMessage = "";
                         Log.d(LOG_TAG, "readerMode onTagDiscovered");
-                        WritableMap nfcTag = Arguments.createMap();;
+                        WritableMap nfcTag = Arguments.createMap();
                         // if the tag contains NDEF, we want to report the content
                         if (Arrays.asList(tag.getTechList()).contains(Ndef.class.getName())) {
                             Ndef ndef = Ndef.get(tag);
@@ -1055,6 +1055,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                 //verify signature
                                 try {
                                     isoDep.connect();
+                                    isoDep.setTimeout(5000);
                                     Boolean valid = Ev1SignatureCheck.doOriginalityCheck(isoDep, publicKey);
                                     // signature ok
                                     if (valid) {
@@ -1085,6 +1086,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             //verify signature
                             try {
                                 isoDep.connect();
+                                isoDep.setTimeout(5000);
                                 // case 1 checking password
                                 if(!password.isEmpty()) {
                                     // unlock with password
