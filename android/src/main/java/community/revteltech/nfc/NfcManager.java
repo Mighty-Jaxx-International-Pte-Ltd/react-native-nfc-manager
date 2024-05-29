@@ -1015,18 +1015,24 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     @ReactMethod
     private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, Callback callback) {
         if(this.enableReadNFC){
-            this.nfcAdapter.disableReaderMode(currentActivity);
+            if(!currentActivity.isFinishing()) {
+                this.nfcAdapter.disableReaderMode(currentActivity);
+            }
             this.enableReadNFC = false;
         }
         this.nfcAdapter = NfcAdapter.getDefaultAdapter(context);
         this.currentActivity = getCurrentActivity();
         if (nfcAdapter != null && currentActivity != null && !currentActivity.isFinishing()) {
             final NfcManager manager = this;
+            WritableMap nfcTag1 = Arguments.createMap();
             try {
                 if (publicKey.isEmpty()) {
-                    sendEvent("NfcOriginalCheckError", null);
+                    nfcTag1.putString("messageError", "There is no public key");
+                    sendEvent("NfcOriginalCheckError", nfcTag1);
                 }
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.HONEYCOMB) {
+                    nfcTag1.putString("messageError", "minSdkVersion must be Honeycomb (19) or later.");
+                    sendEvent("NfcOriginalCheckError", nfcTag1);
                     throw new RuntimeException("minSdkVersion must be Honeycomb (19) or later.");
                 }
                 Log.i(LOG_TAG, "enableReaderMode");
@@ -1037,11 +1043,11 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                     @Override
                     public void onTagDiscovered(Tag tag) {
                         manager.tag = tag;
+                        WritableMap nfcTag = Arguments.createMap();
                         byte[] pwd = hexToByteArray(password);
                         int step = 0;
                         String ndfMessage = "";
                         Log.d(LOG_TAG, "readerMode onTagDiscovered");
-                        WritableMap nfcTag = Arguments.createMap();
                         // if the tag contains NDEF, we want to report the content
                         if (Arrays.asList(tag.getTechList()).contains(Ndef.class.getName())) {
                             Ndef ndef = Ndef.get(tag);
@@ -1060,7 +1066,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     // signature ok
                                     if (valid) {
                                         step = 5;
-                                        nfcTag.putString("messageError", "found chip");
+                                        nfcTag.putString("messageError", "Chip is valid");
                                         sendEvent("NfcManagerDiscoverTag", nfcTag);
                                     } else {
                                         nfcTag.putString("signature", Ev1SignatureCheck.signatureNFC);
@@ -1131,7 +1137,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                 Log.w(LOG_TAG, "step: " + step);
                             }
                         } else {
-                            nfcTag.putString("messageError", "Cannot find device");
+                            nfcTag.putString("messageError", "Cannot find chip");
                             sendEvent("NfcOriginalCheckError", nfcTag);
                         }
                     }
@@ -1146,6 +1152,10 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         Activity activity = getCurrentActivity();
         Intent intent = new Intent(activity, activity.getClass());
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flag = 0;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flag = 33554432; //PendingIntent.FLAG_MUTABLE;
+        }
         return PendingIntent.getActivity(activity, 0, intent, 0);
     }
 
@@ -1157,15 +1167,13 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         return techLists.toArray(new String[0][0]);
     }
 
-    private void sendEvent(String eventName,
-                           @Nullable WritableMap params) {
+    private void sendEvent(String eventName, @Nullable WritableMap params) {
         getReactApplicationContext()
                 .getJSModule(RCTNativeAppEventEmitter.class)
                 .emit(eventName, params);
     }
 
-    private void sendEventWithJson(String eventName,
-                                   JSONObject json) {
+    private void sendEventWithJson(String eventName, JSONObject json) {
         try {
             WritableMap map = JsonConvert.jsonToReact(json);
             sendEvent(eventName, map);
