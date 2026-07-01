@@ -38,14 +38,15 @@ NSString* getExceptionMessage(NSException *exception) {
     return [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""];
 }
 
-#define NFC_SAFE(callback, code) \
-    @try { \
-        code; \
-    } @catch (NSException *exception) { \
-        if (callback) { \
-            callback(@[getExceptionMessage(exception), [NSNull null]]); \
-        } \
+static void nfcSafeExecute(RCTResponseSenderBlock callback, void (^block)(void)) {
+    @try {
+        block();
+    } @catch (NSException *exception) {
+        if (callback) {
+            callback(@[getExceptionMessage(exception), [NSNull null]]);
+        }
     }
+}
 
 @implementation NfcManager {
     NSDictionary *nfcTechTypes;
@@ -254,7 +255,7 @@ RCT_EXPORT_MODULE()
                           NSLog(@"input bytes: %@", getHexString(data));
                           [mifareTag sendMiFareCommand:data
                                      completionHandler:^(NSData *response, NSError *error) {
-                              NFC_SAFE(pendingCallback, {
+                              nfcSafeExecute(pendingCallback, ^{
                                   if (error) {
                                      pendingCallback(@[getErrorMessage(error)]);
                                      return;
@@ -319,7 +320,7 @@ RCT_EXPORT_MODULE()
 
 RCT_EXPORT_METHOD(isSupported: (NSString *)tech callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if ([tech isEqualToString:@""] || [tech isEqualToString:@"Ndef"]) {
         if (@available(iOS 11.0, *)) {
             callback(@[[NSNull null], NFCNDEFReaderSession.readingAvailable ? @YES : @NO]);
@@ -338,7 +339,7 @@ RCT_EXPORT_METHOD(isSupported: (NSString *)tech callback:(nonnull RCTResponseSen
 
 RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         if (NFCNDEFReaderSession.readingAvailable) {
             NSLog(@"NfcManager initialized");
@@ -354,7 +355,7 @@ RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (sessionEx == nil) {
         callback(@[@"you need to call registerTagEventEx first", [NSNull null]]);
         return;
@@ -371,7 +372,7 @@ RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPasswor
 
 RCT_EXPORT_METHOD(cancelTechnologyRequest:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     techRequestTypes = nil;
     techRequestCallback = nil;
     [sessionEx invalidateSession];
@@ -381,7 +382,7 @@ RCT_EXPORT_METHOD(cancelTechnologyRequest:(nonnull RCTResponseSenderBlock)callba
 
 RCT_EXPORT_METHOD(registerTagEvent:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         if (session == nil) {
             session = [[NFCNDEFReaderSession alloc]
@@ -400,7 +401,7 @@ RCT_EXPORT_METHOD(registerTagEvent:(NSDictionary *)options callback:(nonnull RCT
 
 RCT_EXPORT_METHOD(unregisterTagEvent:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         if (session != nil) {
             [session invalidateSession];
@@ -416,7 +417,7 @@ RCT_EXPORT_METHOD(unregisterTagEvent:(nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(registerTagEventEx:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (sessionEx == nil) {
             sessionEx = [[NFCTagReaderSession alloc]
@@ -436,7 +437,7 @@ RCT_EXPORT_METHOD(registerTagEventEx:(NSDictionary *)options callback:(nonnull R
 
 RCT_EXPORT_METHOD(unregisterTagEventEx:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             [sessionEx invalidateSession];
@@ -452,7 +453,7 @@ RCT_EXPORT_METHOD(unregisterTagEventEx:(nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(invalidateSession:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (session != nil) {
             [session invalidateSession];
@@ -469,7 +470,7 @@ RCT_EXPORT_METHOD(invalidateSession:(nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(invalidateSessionWithError:(NSString *)errorMessage callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (session != nil) {
             [session invalidateSessionWithErrorMessage: errorMessage];
@@ -486,7 +487,7 @@ RCT_EXPORT_METHOD(invalidateSessionWithError:(NSString *)errorMessage callback:(
 
 RCT_EXPORT_METHOD(getTag: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         NSMutableDictionary* rnTag = @{}.mutableCopy;
         id<NFCNDEFTag> ndefTag = nil;
@@ -523,7 +524,7 @@ RCT_EXPORT_METHOD(getTag: (nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(getNdefMessage: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         id<NFCNDEFTag> ndefTag = nil;
         
@@ -557,7 +558,7 @@ RCT_EXPORT_METHOD(getNdefMessage: (nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(writeNdefMessage:(NSArray*)bytes callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         id<NFCNDEFTag> ndefTag = nil;
         
@@ -598,7 +599,7 @@ RCT_EXPORT_METHOD(writeNdefMessage:(NSArray*)bytes callback:(nonnull RCTResponse
 
 RCT_EXPORT_METHOD(sendMifareCommand:(NSArray *)bytes callback: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -631,7 +632,7 @@ RCT_EXPORT_METHOD(sendMifareCommand:(NSArray *)bytes callback: (nonnull RCTRespo
 
 RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)password :(NSString *)packString :(NSString *)udid :(NSString *) nfcPasswordProtection callback: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         NSMutableDictionary *resultChecking = @{}.mutableCopy;
         if (sessionEx != nil) {
@@ -726,7 +727,7 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
 
 RCT_EXPORT_METHOD(sendCommandAPDUBytes:(NSArray *)bytes callback: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -758,7 +759,7 @@ RCT_EXPORT_METHOD(sendCommandAPDUBytes:(NSArray *)bytes callback: (nonnull RCTRe
 
 RCT_EXPORT_METHOD(sendCommandAPDU:(NSDictionary *)apduData callback: (nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -801,7 +802,7 @@ RCT_EXPORT_METHOD(sendCommandAPDU:(NSDictionary *)apduData callback: (nonnull RC
 
 RCT_EXPORT_METHOD(setAlertMessage: (NSString *)alertMessage callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         if (session != nil) {
             session.alertMessage = alertMessage;
@@ -820,7 +821,7 @@ RCT_EXPORT_METHOD(setAlertMessage: (NSString *)alertMessage callback:(nonnull RC
 
 RCT_EXPORT_METHOD(isSessionAvailable:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         callback(@[[NSNull null], session != nil ? @YES : @NO]);
     } else {
@@ -831,7 +832,7 @@ RCT_EXPORT_METHOD(isSessionAvailable:(nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(isSessionExAvailable:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 11.0, *)) {
         callback(@[[NSNull null], sessionEx != nil ? @YES : @NO]);
     } else {
@@ -845,7 +846,7 @@ RCT_EXPORT_METHOD(isSessionExAvailable:(nonnull RCTResponseSenderBlock)callback)
 // ---------------------------
 RCT_EXPORT_METHOD(iso15693_getSystemInfo:(nonnull NSNumber *)flags callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -883,7 +884,7 @@ RCT_EXPORT_METHOD(iso15693_getSystemInfo:(nonnull NSNumber *)flags callback:(non
 
 RCT_EXPORT_METHOD(iso15693_readSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -917,7 +918,7 @@ RCT_EXPORT_METHOD(iso15693_readSingleBlock:(NSDictionary *)options callback:(non
 
 RCT_EXPORT_METHOD(iso15693_writeSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -953,7 +954,7 @@ RCT_EXPORT_METHOD(iso15693_writeSingleBlock:(NSDictionary *)options callback:(no
 
 RCT_EXPORT_METHOD(iso15693_lockBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -987,7 +988,7 @@ RCT_EXPORT_METHOD(iso15693_lockBlock:(NSDictionary *)options callback:(nonnull R
 
 RCT_EXPORT_METHOD(iso15693_writeAFI:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1021,7 +1022,7 @@ RCT_EXPORT_METHOD(iso15693_writeAFI:(NSDictionary *)options callback:(nonnull RC
 
 RCT_EXPORT_METHOD(iso15693_lockAFI:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1053,7 +1054,7 @@ RCT_EXPORT_METHOD(iso15693_lockAFI:(NSDictionary *)options callback:(nonnull RCT
 
 RCT_EXPORT_METHOD(iso15693_writeDSFID:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1087,7 +1088,7 @@ RCT_EXPORT_METHOD(iso15693_writeDSFID:(NSDictionary *)options callback:(nonnull 
 
 RCT_EXPORT_METHOD(iso15693_lockDSFID:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1120,7 +1121,7 @@ RCT_EXPORT_METHOD(iso15693_lockDSFID:(NSDictionary *)options callback:(nonnull R
 
 RCT_EXPORT_METHOD(iso15693_resetToReady:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1152,7 +1153,7 @@ RCT_EXPORT_METHOD(iso15693_resetToReady:(NSDictionary *)options callback:(nonnul
 
 RCT_EXPORT_METHOD(iso15693_select:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1184,7 +1185,7 @@ RCT_EXPORT_METHOD(iso15693_select:(NSDictionary *)options callback:(nonnull RCTR
 
 RCT_EXPORT_METHOD(iso15693_stayQuiet:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1213,7 +1214,7 @@ RCT_EXPORT_METHOD(iso15693_stayQuiet:(nonnull RCTResponseSenderBlock)callback)
 
 RCT_EXPORT_METHOD(iso15693_customCommand:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1249,7 +1250,7 @@ RCT_EXPORT_METHOD(iso15693_customCommand:(NSDictionary *)options callback:(nonnu
 
 RCT_EXPORT_METHOD(iso15693_extendedReadSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1283,7 +1284,7 @@ RCT_EXPORT_METHOD(iso15693_extendedReadSingleBlock:(NSDictionary *)options callb
 
 RCT_EXPORT_METHOD(iso15693_extendedWriteSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1319,7 +1320,7 @@ RCT_EXPORT_METHOD(iso15693_extendedWriteSingleBlock:(NSDictionary *)options call
 
 RCT_EXPORT_METHOD(iso15693_extendedLockBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
-    NFC_SAFE(callback, {
+    nfcSafeExecute(callback, ^{
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
