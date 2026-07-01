@@ -34,6 +34,19 @@ NSString* getErrorMessage(NSError *error) {
             [error domain], (long)[error code]];
 }
 
+NSString* getExceptionMessage(NSException *exception) {
+    return [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""];
+}
+
+#define NFC_SAFE(callback, code) \
+    @try { \
+        code; \
+    } @catch (NSException *exception) { \
+        if (callback) { \
+            callback(@[getExceptionMessage(exception), [NSNull null]]); \
+        } \
+    }
+
 @implementation NfcManager {
     NSDictionary *nfcTechTypes;
     NSArray *techRequestTypes;
@@ -241,32 +254,31 @@ RCT_EXPORT_MODULE()
                           NSLog(@"input bytes: %@", getHexString(data));
                           [mifareTag sendMiFareCommand:data
                                      completionHandler:^(NSData *response, NSError *error) {
-                              if (error) {
-                                 pendingCallback(@[getErrorMessage(error)]);
-                                 return;
-                              } else {
+                              NFC_SAFE(pendingCallback, {
+                                  if (error) {
+                                     pendingCallback(@[getErrorMessage(error)]);
+                                     return;
+                                  }
                                   if(response.length == 1){
                                       pendingCallback(@[getErrorMessage(error)]);
                                       return;
-                                  }else{
-                                      GMEllipticCurve curve = GMEllipticCurveSecp128r1;
-                                      GMEllipticCurveCrypto *crypto = [GMEllipticCurveCrypto cryptoForCurve:curve];
-                                      crypto = [GMEllipticCurveCrypto cryptoForKeyBase64:@"BElOGjhtPTz+PcEOXeaKSZscIC21sTI5PontGf5b6Lxh"];
-                                      NSData *udidData = [NSData dataWithHexString: [NSString stringWithFormat:@"000000000000000000%@",getHexString(mifareTag.identifier)]];
-                                      NSData *encodedCorrectSignature = derEncodeSignature(response);
-                                      BOOL valid = [crypto verifyEncodedSignature:encodedCorrectSignature forHash:udidData];
-                                      if(valid){
-                                        NSMutableDictionary *tagInfo = @{}.mutableCopy;
-                                        [tagInfo setObject:getHexString(mifareTag.identifier) forKey:@"id"];
-                                        [tagInfo setValue:requestType forKey:@"requestType"];
-                                        [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
-                                        pendingCallback(@[[NSNull null], tagInfo]);
-                                      }else{
-                                          pendingCallback(@[getErrorMessage(error)]);
-                                          return;
-                                      }
                                   }
-                              }
+                                  GMEllipticCurve curve = GMEllipticCurveSecp128r1;
+                                  GMEllipticCurveCrypto *crypto = [GMEllipticCurveCrypto cryptoForCurve:curve];
+                                  crypto = [GMEllipticCurveCrypto cryptoForKeyBase64:@"BElOGjhtPTz+PcEOXeaKSZscIC21sTI5PontGf5b6Lxh"];
+                                  NSData *udidData = [NSData dataWithHexString: [NSString stringWithFormat:@"000000000000000000%@",getHexString(mifareTag.identifier)]];
+                                  NSData *encodedCorrectSignature = derEncodeSignature(response);
+                                  BOOL valid = [crypto verifyEncodedSignature:encodedCorrectSignature forHash:udidData];
+                                  if(valid){
+                                    NSMutableDictionary *tagInfo = @{}.mutableCopy;
+                                    [tagInfo setObject:getHexString(mifareTag.identifier) forKey:@"id"];
+                                    [tagInfo setValue:requestType forKey:@"requestType"];
+                                    [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
+                                    pendingCallback(@[[NSNull null], tagInfo]);
+                                  }else{
+                                      pendingCallback(@[getErrorMessage(error)]);
+                                  }
+                              });
                             }];
                         }];
                         found = true;
@@ -307,6 +319,7 @@ RCT_EXPORT_MODULE()
 
 RCT_EXPORT_METHOD(isSupported: (NSString *)tech callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if ([tech isEqualToString:@""] || [tech isEqualToString:@"Ndef"]) {
         if (@available(iOS 11.0, *)) {
             callback(@[[NSNull null], NFCNDEFReaderSession.readingAvailable ? @YES : @NO]);
@@ -320,10 +333,12 @@ RCT_EXPORT_METHOD(isSupported: (NSString *)tech callback:(nonnull RCTResponseSen
     }
 
     callback(@[[NSNull null], @NO]);
+    });
 }
 
 RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         if (NFCNDEFReaderSession.readingAvailable) {
             NSLog(@"NfcManager initialized");
@@ -334,10 +349,12 @@ RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
     }
 
     callback(@[@"Not support in this device", [NSNull null]]);
+    });
 }
 
 RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (sessionEx == nil) {
         callback(@[@"you need to call registerTagEventEx first", [NSNull null]]);
         return;
@@ -349,18 +366,22 @@ RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPasswor
     } else {
         callback(@[@"duplicate tech request, please call cancelTechnologyRequest to cancel previous one", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(cancelTechnologyRequest:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     techRequestTypes = nil;
     techRequestCallback = nil;
     [sessionEx invalidateSession];
     callback(@[]);
+    });
 }
 
 RCT_EXPORT_METHOD(registerTagEvent:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         if (session == nil) {
             session = [[NFCNDEFReaderSession alloc]
@@ -374,10 +395,12 @@ RCT_EXPORT_METHOD(registerTagEvent:(NSDictionary *)options callback:(nonnull RCT
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(unregisterTagEvent:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         if (session != nil) {
             [session invalidateSession];
@@ -388,10 +411,12 @@ RCT_EXPORT_METHOD(unregisterTagEvent:(nonnull RCTResponseSenderBlock)callback)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(registerTagEventEx:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (sessionEx == nil) {
             sessionEx = [[NFCTagReaderSession alloc]
@@ -406,10 +431,12 @@ RCT_EXPORT_METHOD(registerTagEventEx:(NSDictionary *)options callback:(nonnull R
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(unregisterTagEventEx:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             [sessionEx invalidateSession];
@@ -420,10 +447,12 @@ RCT_EXPORT_METHOD(unregisterTagEventEx:(nonnull RCTResponseSenderBlock)callback)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(invalidateSession:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (session != nil) {
             [session invalidateSession];
@@ -435,10 +464,12 @@ RCT_EXPORT_METHOD(invalidateSession:(nonnull RCTResponseSenderBlock)callback)
             callback(@[@"No active session", [NSNull null]]);
         }
     }
+    });
 }
 
 RCT_EXPORT_METHOD(invalidateSessionWithError:(NSString *)errorMessage callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (session != nil) {
             [session invalidateSessionWithErrorMessage: errorMessage];
@@ -450,10 +481,12 @@ RCT_EXPORT_METHOD(invalidateSessionWithError:(NSString *)errorMessage callback:(
             callback(@[@"No active session", [NSNull null]]);
         }
     }
+    });
 }
 
 RCT_EXPORT_METHOD(getTag: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         NSMutableDictionary* rnTag = @{}.mutableCopy;
         id<NFCNDEFTag> ndefTag = nil;
@@ -485,10 +518,12 @@ RCT_EXPORT_METHOD(getTag: (nonnull RCTResponseSenderBlock)callback)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(getNdefMessage: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         id<NFCNDEFTag> ndefTag = nil;
         
@@ -517,10 +552,12 @@ RCT_EXPORT_METHOD(getNdefMessage: (nonnull RCTResponseSenderBlock)callback)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(writeNdefMessage:(NSArray*)bytes callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         id<NFCNDEFTag> ndefTag = nil;
         
@@ -556,10 +593,12 @@ RCT_EXPORT_METHOD(writeNdefMessage:(NSArray*)bytes callback:(nonnull RCTResponse
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(sendMifareCommand:(NSArray *)bytes callback: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -587,10 +626,12 @@ RCT_EXPORT_METHOD(sendMifareCommand:(NSArray *)bytes callback: (nonnull RCTRespo
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)password :(NSString *)packString :(NSString *)udid :(NSString *) nfcPasswordProtection callback: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         NSMutableDictionary *resultChecking = @{}.mutableCopy;
         if (sessionEx != nil) {
@@ -680,10 +721,12 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(sendCommandAPDUBytes:(NSArray *)bytes callback: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -710,10 +753,12 @@ RCT_EXPORT_METHOD(sendCommandAPDUBytes:(NSArray *)bytes callback: (nonnull RCTRe
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(sendCommandAPDU:(NSDictionary *)apduData callback: (nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (sessionEx != nil) {
             if (sessionEx.connectedTag) {
@@ -751,10 +796,12 @@ RCT_EXPORT_METHOD(sendCommandAPDU:(NSDictionary *)apduData callback: (nonnull RC
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(setAlertMessage: (NSString *)alertMessage callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         if (session != nil) {
             session.alertMessage = alertMessage;
@@ -768,24 +815,29 @@ RCT_EXPORT_METHOD(setAlertMessage: (NSString *)alertMessage callback:(nonnull RC
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(isSessionAvailable:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         callback(@[[NSNull null], session != nil ? @YES : @NO]);
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(isSessionExAvailable:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 11.0, *)) {
         callback(@[[NSNull null], sessionEx != nil ? @YES : @NO]);
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 // ---------------------------
@@ -793,6 +845,7 @@ RCT_EXPORT_METHOD(isSessionExAvailable:(nonnull RCTResponseSenderBlock)callback)
 // ---------------------------
 RCT_EXPORT_METHOD(iso15693_getSystemInfo:(nonnull NSNumber *)flags callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -825,10 +878,12 @@ RCT_EXPORT_METHOD(iso15693_getSystemInfo:(nonnull NSNumber *)flags callback:(non
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_readSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -857,10 +912,12 @@ RCT_EXPORT_METHOD(iso15693_readSingleBlock:(NSDictionary *)options callback:(non
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_writeSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -891,10 +948,12 @@ RCT_EXPORT_METHOD(iso15693_writeSingleBlock:(NSDictionary *)options callback:(no
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_lockBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -923,10 +982,12 @@ RCT_EXPORT_METHOD(iso15693_lockBlock:(NSDictionary *)options callback:(nonnull R
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_writeAFI:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -955,10 +1016,12 @@ RCT_EXPORT_METHOD(iso15693_writeAFI:(NSDictionary *)options callback:(nonnull RC
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_lockAFI:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -985,10 +1048,12 @@ RCT_EXPORT_METHOD(iso15693_lockAFI:(NSDictionary *)options callback:(nonnull RCT
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_writeDSFID:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1017,10 +1082,12 @@ RCT_EXPORT_METHOD(iso15693_writeDSFID:(NSDictionary *)options callback:(nonnull 
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_lockDSFID:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1048,10 +1115,12 @@ RCT_EXPORT_METHOD(iso15693_lockDSFID:(NSDictionary *)options callback:(nonnull R
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_resetToReady:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1078,10 +1147,12 @@ RCT_EXPORT_METHOD(iso15693_resetToReady:(NSDictionary *)options callback:(nonnul
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_select:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1108,10 +1179,12 @@ RCT_EXPORT_METHOD(iso15693_select:(NSDictionary *)options callback:(nonnull RCTR
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_stayQuiet:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1135,10 +1208,12 @@ RCT_EXPORT_METHOD(iso15693_stayQuiet:(nonnull RCTResponseSenderBlock)callback)
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_customCommand:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1169,10 +1244,12 @@ RCT_EXPORT_METHOD(iso15693_customCommand:(NSDictionary *)options callback:(nonnu
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_extendedReadSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1201,10 +1278,12 @@ RCT_EXPORT_METHOD(iso15693_extendedReadSingleBlock:(NSDictionary *)options callb
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_extendedWriteSingleBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1235,10 +1314,12 @@ RCT_EXPORT_METHOD(iso15693_extendedWriteSingleBlock:(NSDictionary *)options call
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 RCT_EXPORT_METHOD(iso15693_extendedLockBlock:(NSDictionary *)options callback:(nonnull RCTResponseSenderBlock)callback)
 {
+    NFC_SAFE(callback, {
     if (@available(iOS 13.0, *)) {
         if (!sessionEx || !sessionEx.connectedTag) {
             callback(@[@"Not connected", [NSNull null]]);
@@ -1267,6 +1348,7 @@ RCT_EXPORT_METHOD(iso15693_extendedLockBlock:(NSDictionary *)options callback:(n
     } else {
         callback(@[@"Not support in this device", [NSNull null]]);
     }
+    });
 }
 
 @end
