@@ -1107,12 +1107,12 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     });
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
                                         final byte[] userData = isoDep.transceive(new byte[]{
-                                                (byte) 0x3A, // READ
-                                                (byte) 0x06,// start page address
+                                                (byte) 0x3A, // FAST_READ
+                                                (byte) 0x04,// start page address
                                                 (byte) 0x31// end page address
                                         });
                                         step = 4;
-                                        ndfMessage = new String(userData, "UTF-8");
+                                        ndfMessage = decodeNtag215UserData(userData);
                                         nfcTag.putString("ndfMessage", ndfMessage);
                                         nfcTag.putString("messageError", "success");
                                         sendEvent("NfcOriginalChecked", nfcTag);
@@ -1124,12 +1124,12 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                 }else{
                                     //fast read data
                                     final byte[] userData = isoDep.transceive(new byte[]{
-                                            (byte) 0x3A, // READ
-                                            (byte) 0x06,// start page address
+                                            (byte) 0x3A, // FAST_READ
+                                            (byte) 0x04,// start page address
                                             (byte) 0x31// end page address
                                     });
                                     step = 4;
-                                    ndfMessage = new String(userData, "UTF-8");
+                                    ndfMessage = decodeNtag215UserData(userData);
                                     nfcTag.putString("ndfMessage", ndfMessage);
                                     nfcTag.putString("messageError", "success");
                                     sendEvent("NfcOriginalChecked", nfcTag);
@@ -1409,6 +1409,58 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
             value.pushInt((bytes[i] & 0xFF));
         }
         return value;
+    }
+
+    private static final int NTAG215_USER_DATA_LENGTH_BYTES = 2;
+    private static final int NTAG215_USER_DATA_PAYLOAD_OFFSET = 8;
+    private static final int NTAG215_MAX_PAYLOAD_BYTES = 502;
+    private static final int NTAG215_LEGACY_USER_DATA_OFFSET = 8;
+
+    private static byte[] trimTrailingNullBytes(byte[] data) {
+        int end = data.length;
+        while (end > 0 && data[end - 1] == 0x00) {
+            end -= 1;
+        }
+        if (end == data.length) {
+            return data;
+        }
+        return Arrays.copyOf(data, end);
+    }
+
+    private static String decodeNtag215UserData(byte[] rawFromPage04) {
+        if (rawFromPage04.length < NTAG215_USER_DATA_LENGTH_BYTES) {
+            return "";
+        }
+
+        int payloadLength = ((rawFromPage04[0] & 0xff) << 8) | (rawFromPage04[1] & 0xff);
+        if (payloadLength > 0 && payloadLength <= NTAG215_MAX_PAYLOAD_BYTES) {
+            int[] payloadOffsets = {
+                NTAG215_USER_DATA_PAYLOAD_OFFSET,
+                NTAG215_USER_DATA_LENGTH_BYTES,
+            };
+
+            for (int payloadOffset : payloadOffsets) {
+                if (rawFromPage04.length >= payloadOffset + payloadLength) {
+                    return new String(
+                        rawFromPage04,
+                        payloadOffset,
+                        payloadLength,
+                        StandardCharsets.US_ASCII
+                    );
+                }
+            }
+        }
+
+        if (rawFromPage04.length > NTAG215_LEGACY_USER_DATA_OFFSET) {
+            byte[] legacy = trimTrailingNullBytes(Arrays.copyOfRange(
+                rawFromPage04,
+                NTAG215_LEGACY_USER_DATA_OFFSET,
+                rawFromPage04.length
+            ));
+            return new String(legacy, StandardCharsets.US_ASCII);
+        }
+
+        return "";
     }
 
     public static byte[] hexToByteArray(String hex) {

@@ -22,6 +22,61 @@ NSString* getHexString(NSData *data) {
     return sbuf;
 }
 
+static const NSUInteger NTAG215_USER_DATA_LENGTH_BYTES = 2;
+static const NSUInteger NTAG215_USER_DATA_HEADER_BYTES = 8;
+static const NSUInteger NTAG215_USER_DATA_PAYLOAD_OFFSET = 8;
+static const NSUInteger NTAG215_MAX_PAYLOAD_BYTES = 502;
+static const NSUInteger NTAG215_LEGACY_USER_DATA_OFFSET = 8;
+
+static NSData *trimTrailingNullBytes(NSData *data) {
+    const uint8_t *bytes = data.bytes;
+    NSUInteger length = data.length;
+    while (length > 0 && bytes[length - 1] == 0x00) {
+        length -= 1;
+    }
+    if (length == data.length) {
+        return data;
+    }
+    return [data subdataWithRange:NSMakeRange(0, length)];
+}
+
+static NSString *decodeNtag215UserData(NSData *rawFromPage04) {
+    if (rawFromPage04.length < NTAG215_USER_DATA_LENGTH_BYTES) {
+        return @"";
+    }
+
+    const uint8_t *bytes = rawFromPage04.bytes;
+    NSUInteger payloadLength = ((NSUInteger)bytes[0] << 8) | bytes[1];
+
+    if (payloadLength > 0 && payloadLength <= NTAG215_MAX_PAYLOAD_BYTES) {
+        const NSUInteger payloadOffsets[] = {
+            NTAG215_USER_DATA_PAYLOAD_OFFSET,
+            NTAG215_USER_DATA_LENGTH_BYTES,
+        };
+
+        for (NSUInteger i = 0; i < sizeof(payloadOffsets) / sizeof(payloadOffsets[0]); i++) {
+            NSUInteger payloadOffset = payloadOffsets[i];
+            if (rawFromPage04.length >= payloadOffset + payloadLength) {
+                NSData *payload = [rawFromPage04 subdataWithRange:NSMakeRange(
+                    payloadOffset,
+                    payloadLength
+                )];
+                return [[NSString alloc] initWithData:payload encoding:NSASCIIStringEncoding] ?: @"";
+            }
+        }
+    }
+
+    if (rawFromPage04.length > NTAG215_LEGACY_USER_DATA_OFFSET) {
+        NSData *legacy = trimTrailingNullBytes([rawFromPage04 subdataWithRange:NSMakeRange(
+            NTAG215_LEGACY_USER_DATA_OFFSET,
+            rawFromPage04.length - NTAG215_LEGACY_USER_DATA_OFFSET
+        )]);
+        return [[NSString alloc] initWithData:legacy encoding:NSASCIIStringEncoding] ?: @"";
+    }
+
+    return @"";
+}
+
 NSString* getErrorMessage(NSError *error) {
      NSDictionary *userInfo = [error userInfo];
      NSError *underlyingError = [userInfo objectForKey:NSUnderlyingErrorKey];
@@ -34,8 +89,18 @@ NSString* getErrorMessage(NSError *error) {
             [error domain], (long)[error code]];
 }
 
+static NSString * const NFCInvalidSignatureMessage = @"Invalid tag signature. This NFC tag could not be verified.";
+
 NSString* getExceptionMessage(NSException *exception) {
-    return [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""];
+    NSString *name = exception.name ?: @"";
+    NSString *reason = exception.reason ?: @"";
+
+    if ([name isEqualToString:@"Invalid signature"] ||
+        [reason rangeOfString:@"signature" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return NFCInvalidSignatureMessage;
+    }
+
+    return [NSString stringWithFormat:@"%@: %@", name, reason];
 }
 
 static void nfcSafeExecute(RCTResponseSenderBlock callback, void (^block)(void)) {
@@ -288,7 +353,7 @@ RCT_EXPORT_MODULE()
                                     [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
                                     pendingCallback(@[[NSNull null], tagInfo]);
                                   }else{
-                                      pendingCallback(@[getErrorMessage(error)]);
+                                      pendingCallback(@[NFCInvalidSignatureMessage, [NSNull null]]);
                                   }
                               });
                             }];
@@ -675,7 +740,7 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
                                     return;
                                 }
                                 // read user data
-                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0631"];
+                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0431"];
                                 sleep(sleepTime);
                                 [mifareTag sendMiFareCommand:commandReadUserData
                                        completionHandler:^(NSData *userData, NSError *error) {
@@ -683,9 +748,7 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
                                         callback(@[getErrorMessage(error), @"ERROR  632"]);
                                         [sessionEx invalidateSession];
                                     } else {
-                                        NSString *encryptedString = [userData hexString];
-                                        encryptedString = [NSString stringFromHex:encryptedString];
-                                        encryptedString = encryptedString? encryptedString : @"";
+                                        NSString *encryptedString = decodeNtag215UserData(userData);
                                         [resultChecking setValue:encryptedString forKey:@"encryptedString"];
                                         callback(@[[NSNull null],  resultChecking]);
                                         [sessionEx invalidateSession];
@@ -703,17 +766,15 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
                                 callback(@[getErrorMessage(error), [NSNull null]]);
                                 [sessionEx invalidateSession];
                             } else {
-                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0631"];
+                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0431"];
                                 sleep(sleepTime);
                                 [mifareTag sendMiFareCommand:commandReadUserData
                                        completionHandler:^(NSData *userData, NSError *error) {
                                     if (error) {
-                                        callback(@[[NSNull null],  @"3A0631 ERROR AT 586"]);
+                                        callback(@[[NSNull null],  @"3A0431 ERROR AT 586"]);
                                         [sessionEx invalidateSession];
                                     } else {
-                                       NSString *encryptedString = [userData hexString];
-                                       encryptedString = [NSString stringFromHex:encryptedString];
-                                       encryptedString = encryptedString? encryptedString : @"";
+                                       NSString *encryptedString = decodeNtag215UserData(userData);
                                        [resultChecking setValue:encryptedString forKey:@"encryptedString"];
                                        callback(@[[NSNull null],  resultChecking]);
                                        [sessionEx invalidateSession];
