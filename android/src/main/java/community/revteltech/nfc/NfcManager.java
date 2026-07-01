@@ -1414,7 +1414,6 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     private static final int NTAG215_USER_DATA_LENGTH_BYTES = 2;
     private static final int NTAG215_USER_DATA_PAYLOAD_OFFSET = 8;
     private static final int NTAG215_MAX_PAYLOAD_BYTES = 502;
-    private static final int NTAG215_LEGACY_USER_DATA_OFFSET = 8;
 
     private static byte[] trimTrailingNullBytes(byte[] data) {
         int end = data.length;
@@ -1427,6 +1426,21 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         return Arrays.copyOf(data, end);
     }
 
+    private static byte[] trimLeadingNullBytes(byte[] data) {
+        int start = 0;
+        while (start < data.length && data[start] == 0x00) {
+            start += 1;
+        }
+        if (start == 0) {
+            return data;
+        }
+        return Arrays.copyOfRange(data, start, data.length);
+    }
+
+    private static byte[] trimNullPadding(byte[] data) {
+        return trimTrailingNullBytes(trimLeadingNullBytes(data));
+    }
+
     private static String decodeNtag215UserData(byte[] rawFromPage04) {
         if (rawFromPage04.length < NTAG215_USER_DATA_LENGTH_BYTES) {
             return "";
@@ -1435,28 +1449,24 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         int payloadLength = ((rawFromPage04[0] & 0xff) << 8) | (rawFromPage04[1] & 0xff);
         if (payloadLength > 0 && payloadLength <= NTAG215_MAX_PAYLOAD_BYTES) {
             int[] payloadOffsets = {
-                NTAG215_USER_DATA_PAYLOAD_OFFSET,
                 NTAG215_USER_DATA_LENGTH_BYTES,
+                NTAG215_USER_DATA_PAYLOAD_OFFSET,
             };
 
             for (int payloadOffset : payloadOffsets) {
                 if (rawFromPage04.length >= payloadOffset + payloadLength) {
-                    return new String(
+                    byte[] payload = trimNullPadding(Arrays.copyOfRange(
                         rawFromPage04,
                         payloadOffset,
-                        payloadLength,
-                        StandardCharsets.US_ASCII
-                    );
+                        payloadOffset + payloadLength
+                    ));
+                    return new String(payload, StandardCharsets.US_ASCII);
                 }
             }
         }
 
-        if (rawFromPage04.length > NTAG215_LEGACY_USER_DATA_OFFSET) {
-            byte[] legacy = trimTrailingNullBytes(Arrays.copyOfRange(
-                rawFromPage04,
-                NTAG215_LEGACY_USER_DATA_OFFSET,
-                rawFromPage04.length
-            ));
+        if (rawFromPage04.length > 0) {
+            byte[] legacy = trimNullPadding(rawFromPage04);
             return new String(legacy, StandardCharsets.US_ASCII);
         }
 

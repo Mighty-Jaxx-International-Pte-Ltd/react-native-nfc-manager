@@ -23,10 +23,8 @@ NSString* getHexString(NSData *data) {
 }
 
 static const NSUInteger NTAG215_USER_DATA_LENGTH_BYTES = 2;
-static const NSUInteger NTAG215_USER_DATA_HEADER_BYTES = 8;
 static const NSUInteger NTAG215_USER_DATA_PAYLOAD_OFFSET = 8;
 static const NSUInteger NTAG215_MAX_PAYLOAD_BYTES = 502;
-static const NSUInteger NTAG215_LEGACY_USER_DATA_OFFSET = 8;
 
 static NSData *trimTrailingNullBytes(NSData *data) {
     const uint8_t *bytes = data.bytes;
@@ -40,6 +38,22 @@ static NSData *trimTrailingNullBytes(NSData *data) {
     return [data subdataWithRange:NSMakeRange(0, length)];
 }
 
+static NSData *trimLeadingNullBytes(NSData *data) {
+    const uint8_t *bytes = data.bytes;
+    NSUInteger start = 0;
+    while (start < data.length && bytes[start] == 0x00) {
+        start += 1;
+    }
+    if (start == 0) {
+        return data;
+    }
+    return [data subdataWithRange:NSMakeRange(start, data.length - start)];
+}
+
+static NSData *trimNullPadding(NSData *data) {
+    return trimTrailingNullBytes(trimLeadingNullBytes(data));
+}
+
 static NSString *decodeNtag215UserData(NSData *rawFromPage04) {
     if (rawFromPage04.length < NTAG215_USER_DATA_LENGTH_BYTES) {
         return @"";
@@ -50,27 +64,24 @@ static NSString *decodeNtag215UserData(NSData *rawFromPage04) {
 
     if (payloadLength > 0 && payloadLength <= NTAG215_MAX_PAYLOAD_BYTES) {
         const NSUInteger payloadOffsets[] = {
-            NTAG215_USER_DATA_PAYLOAD_OFFSET,
             NTAG215_USER_DATA_LENGTH_BYTES,
+            NTAG215_USER_DATA_PAYLOAD_OFFSET,
         };
 
         for (NSUInteger i = 0; i < sizeof(payloadOffsets) / sizeof(payloadOffsets[0]); i++) {
             NSUInteger payloadOffset = payloadOffsets[i];
             if (rawFromPage04.length >= payloadOffset + payloadLength) {
-                NSData *payload = [rawFromPage04 subdataWithRange:NSMakeRange(
+                NSData *payload = trimNullPadding([rawFromPage04 subdataWithRange:NSMakeRange(
                     payloadOffset,
                     payloadLength
-                )];
+                )]);
                 return [[NSString alloc] initWithData:payload encoding:NSASCIIStringEncoding] ?: @"";
             }
         }
     }
 
-    if (rawFromPage04.length > NTAG215_LEGACY_USER_DATA_OFFSET) {
-        NSData *legacy = trimTrailingNullBytes([rawFromPage04 subdataWithRange:NSMakeRange(
-            NTAG215_LEGACY_USER_DATA_OFFSET,
-            rawFromPage04.length - NTAG215_LEGACY_USER_DATA_OFFSET
-        )]);
+    if (rawFromPage04.length > 0) {
+        NSData *legacy = trimNullPadding(rawFromPage04);
         return [[NSString alloc] initWithData:legacy encoding:NSASCIIStringEncoding] ?: @"";
     }
 
