@@ -1,5 +1,4 @@
-https://github.com/dovuthanh/react-native-nfc-manager.gitpackage community.revteltech.nfc;
-
+package community.revteltech.nfc;
 import static android.nfc.NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK;
 
 import android.app.Activity;
