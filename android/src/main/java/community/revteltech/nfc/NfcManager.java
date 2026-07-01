@@ -1012,7 +1012,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     }
 
     @ReactMethod
-    private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, Callback callback) {
+    private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, final String verifySignature, Callback callback) {
         if(this.enableReadNFC){
             if(!currentActivity.isFinishing()) {
                 this.nfcAdapter.disableReaderMode(currentActivity);
@@ -1025,7 +1025,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
             final NfcManager manager = this;
             WritableMap nfcTag1 = Arguments.createMap();
             try {
-                if (publicKey.isEmpty()) {
+                if (publicKey.isEmpty() && shouldVerifySignature(verifySignature)) {
                     nfcTag1.putString("messageError", "There is no public key");
                     sendEvent("NfcOriginalCheckError", nfcTag1);
                 }
@@ -1061,16 +1061,22 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                 try {
                                     isoDep.connect();
                                     isoDep.setTimeout(5000);
-                                    Boolean valid = Ev1SignatureCheck.doOriginalityCheck(isoDep, publicKey);
-                                    // signature ok
-                                    if (valid) {
-                                        step = 5;
-                                        nfcTag.putString("messageError", "Chip is valid");
-                                        sendEvent("NfcManagerDiscoverTag", nfcTag);
+                                    if (shouldVerifySignature(verifySignature)) {
+                                        Boolean valid = Ev1SignatureCheck.doOriginalityCheck(isoDep, publicKey);
+                                        // signature ok
+                                        if (valid) {
+                                            step = 5;
+                                            nfcTag.putString("messageError", "Chip is valid");
+                                            sendEvent("NfcManagerDiscoverTag", nfcTag);
+                                        } else {
+                                            nfcTag.putString("signature", Ev1SignatureCheck.signatureNFC);
+                                            nfcTag.putString("messageError", Ev1SignatureCheck.message);
+                                            sendEvent("NfcOriginalCheckError", nfcTag);
+                                        }
                                     } else {
-                                        nfcTag.putString("signature", Ev1SignatureCheck.signatureNFC);
-                                        nfcTag.putString("messageError", Ev1SignatureCheck.message);
-                                        sendEvent("NfcOriginalCheckError", nfcTag);
+                                        step = 5;
+                                        nfcTag.putString("messageError", "Chip discovered");
+                                        sendEvent("NfcManagerDiscoverTag", nfcTag);
                                     }
                                     isoDep.close();
                                 } catch (IOException e) {
@@ -1145,6 +1151,12 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                 Log.w(LOG_TAG, "Illegal State Exception starting NFC. Assuming application is terminating.");
             }
         }
+    }
+
+    private boolean shouldVerifySignature(final String verifySignature) {
+        return verifySignature == null
+                || verifySignature.isEmpty()
+                || "YES".equalsIgnoreCase(verifySignature);
     }
 
     private PendingIntent getPendingIntent() {

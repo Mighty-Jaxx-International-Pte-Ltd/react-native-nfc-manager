@@ -191,7 +191,11 @@ class NfcManager {
 
         this.cleanUpTagRegistration = true;
       }
-      return callNative('requestTechnology', [tech, detectPassword]);
+      return callNative('requestTechnology', [
+        tech,
+        detectPassword,
+        options.verifySignature ?? 'YES',
+      ]);
     } catch (ex) {
       throw ex;
     }
@@ -340,7 +344,20 @@ class NfcManager {
 
   verifyOriginalCheckNtag215 = (publicKey, password, packString, udid, nfcPasswordProtection) => callNative('verifyOriginalCheckNtag215', [publicKey, password, packString, udid, nfcPasswordProtection]);
 
-  verifyOriginalCheckNtag215Android = (publicKey, password, packString, udid) => callNative('verifyOriginalCheckNtag215Android', [publicKey, password, packString, udid]);
+  verifyOriginalCheckNtag215Android = (
+    publicKey,
+    password,
+    packString,
+    udid,
+    verifySignature = 'YES',
+  ) =>
+    callNative('verifyOriginalCheckNtag215Android', [
+      publicKey,
+      password,
+      packString,
+      udid,
+      verifySignature,
+    ]);
 
   // -------------------------------------
   // (iOS) NfcTech.Iso15693IOS API

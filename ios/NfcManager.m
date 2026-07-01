@@ -52,6 +52,7 @@ static void nfcSafeExecute(RCTResponseSenderBlock callback, void (^block)(void))
     NSDictionary *nfcTechTypes;
     NSArray *techRequestTypes;
     NSString *detectPasswordInRequestTech;
+    NSString *verifySignatureInRequestTech;
     RCTResponseSenderBlock techRequestCallback;
     id<NFCNDEFTag> connectedNdefTag;
 }
@@ -90,6 +91,8 @@ RCT_EXPORT_MODULE()
     techRequestTypes = nil;
     techRequestCallback = nil;
     connectedNdefTag = nil;
+    detectPasswordInRequestTech = nil;
+    verifySignatureInRequestTech = nil;
 }
 
 - (NSArray<NSString *> *)supportedEvents
@@ -251,6 +254,14 @@ RCT_EXPORT_MODULE()
                                 return;
                             }
                           id<NFCMiFareTag> mifareTag = [sessionEx.connectedTag asNFCMiFareTag];
+                          if ([@"NO" caseInsensitiveCompare:verifySignatureInRequestTech ?: @"YES"] == NSOrderedSame) {
+                              NSMutableDictionary *tagInfo = @{}.mutableCopy;
+                              [tagInfo setObject:getHexString(mifareTag.identifier) forKey:@"id"];
+                              [tagInfo setValue:requestType forKey:@"requestType"];
+                              [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
+                              pendingCallback(@[[NSNull null], tagInfo]);
+                              return;
+                          }
                           NSData *data = [NSData dataWithHexString:@"3C00"];
                           NSLog(@"input bytes: %@", getHexString(data));
                           [mifareTag sendMiFareCommand:data
@@ -353,7 +364,7 @@ RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
     });
 }
 
-RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword callback:(nonnull RCTResponseSenderBlock)callback)
+RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword :(NSString *)verifySignature callback:(nonnull RCTResponseSenderBlock)callback)
 {
     nfcSafeExecute(callback, ^{
     if (sessionEx == nil) {
@@ -363,6 +374,7 @@ RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPasswor
     if (techRequestCallback == nil) {
         techRequestTypes = techs;
         detectPasswordInRequestTech = detectPassword;
+        verifySignatureInRequestTech = verifySignature ?: @"YES";
         techRequestCallback = callback;
     } else {
         callback(@[@"duplicate tech request, please call cancelTechnologyRequest to cancel previous one", [NSNull null]]);
