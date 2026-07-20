@@ -1063,24 +1063,37 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             }
                             MifareUltralight isoDep = MifareUltralight.get(tag);
                             if (isoDep != null) {
-                                //verify signature
+                                String stepName = "connect";
                                 try {
+                                    step = 1;
+                                    stepName = "connect";
                                     isoDep.connect();
                                     isoDep.setTimeout(5000);
+                                    step = 5;
+                                    stepName = "ORIGINALITY_CHECK";
                                     Boolean valid = Ev1SignatureCheck.doOriginalityCheck(isoDep, publicKey);
                                     // signature ok
                                     if (valid) {
-                                        step = 5;
                                         nfcTag.putString("messageError", "Chip is valid");
+                                        nfcTag.putInt("step", step);
+                                        nfcTag.putString("stepName", stepName);
                                         sendEvent("NfcManagerDiscoverTag", nfcTag);
                                     } else {
                                         nfcTag.putString("signature", Ev1SignatureCheck.signatureNFC);
-                                        nfcTag.putString("messageError", Ev1SignatureCheck.message);
+                                        nfcTag.putInt("step", step);
+                                        nfcTag.putString("stepName", stepName);
+                                        nfcTag.putString("messageError",
+                                                "step " + step + " (" + stepName + "): " + Ev1SignatureCheck.message);
                                         sendEvent("NfcOriginalCheckError", nfcTag);
                                     }
                                     isoDep.close();
                                 } catch (IOException e) {
-                                    nfcTag.putString("messageError", e.getMessage());
+                                    String detail = e.getMessage() != null ? e.getMessage() : "unknown IOException";
+                                    String message = "step " + step + " (" + stepName + "): " + detail;
+                                    Log.e(LOG_TAG, message, e);
+                                    nfcTag.putInt("step", step);
+                                    nfcTag.putString("stepName", stepName);
+                                    nfcTag.putString("messageError", message);
                                     sendEvent("NfcOriginalCheckError", nfcTag);
                                 } finally {
                                     Log.w(LOG_TAG, "step: " + step);
@@ -1095,42 +1108,64 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                         }
                         MifareUltralight isoDep = MifareUltralight.get(tag);
                         if (isoDep != null) {
-                            //verify signature
+                            // Step names are included in messageError so JS can show which stage failed.
+                            String stepName = "connect";
                             try {
+                                step = 1;
+                                stepName = "connect";
                                 isoDep.connect();
                                 isoDep.setTimeout(5000);
-                                // case 1 checking password
+
                                 if(!password.isEmpty()) {
-                                    // unlock with password
+                                    step = 2;
+                                    stepName = "PWD_AUTH";
                                     byte[] responseCheckPass1 = isoDep.transceive(new byte[]{
                                             (byte) 0x1B, // PWD_AUTH
                                             pwd[0], pwd[1], pwd[2], pwd[3]
                                     });
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
+                                        step = 3;
+                                        stepName = "READ_PAGES";
                                         // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
                                         final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
                                         step = 4;
+                                        stepName = "DECODE";
                                         ndfMessage = new String(userData, "UTF-8");
                                         nfcTag.putString("ndfMessage", ndfMessage);
                                         nfcTag.putString("messageError", "success");
+                                        nfcTag.putInt("step", step);
+                                        nfcTag.putString("stepName", stepName);
                                         sendEvent("NfcOriginalChecked", nfcTag);
                                     }else{
-                                        nfcTag.putString("messageError", "error password: " +  password);
+                                        nfcTag.putInt("step", step);
+                                        nfcTag.putString("stepName", stepName);
+                                        nfcTag.putString("messageError",
+                                                "step " + step + " (" + stepName + "): error password: " + password);
                                         sendEvent("NfcOriginalCheckError", nfcTag);
                                     }
 
                                 }else{
+                                    step = 3;
+                                    stepName = "READ_PAGES";
                                     // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
                                     final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
                                     step = 4;
+                                    stepName = "DECODE";
                                     ndfMessage = new String(userData, "UTF-8");
                                     nfcTag.putString("ndfMessage", ndfMessage);
                                     nfcTag.putString("messageError", "success");
+                                    nfcTag.putInt("step", step);
+                                    nfcTag.putString("stepName", stepName);
                                     sendEvent("NfcOriginalChecked", nfcTag);
                                 }
                                 isoDep.close();
                             } catch (IOException e) {
-                                nfcTag.putString("messageError", e.getMessage());
+                                String detail = e.getMessage() != null ? e.getMessage() : "unknown IOException";
+                                String message = "step " + step + " (" + stepName + "): " + detail;
+                                Log.e(LOG_TAG, message, e);
+                                nfcTag.putInt("step", step);
+                                nfcTag.putString("stepName", stepName);
+                                nfcTag.putString("messageError", message);
                                 sendEvent("NfcOriginalCheckError", nfcTag);
                             }finally {
                                 Log.w(LOG_TAG, "step: " + step);
@@ -1175,18 +1210,27 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (int page = startPage; page <= endPage; page += NTAG215_READ_PAGES_PER_CMD) {
-            if (!ul.isConnected()) {
-                ul.connect();
+            try {
+                if (!ul.isConnected()) {
+                    ul.connect();
+                }
+                byte[] chunk = ul.transceive(new byte[]{
+                        (byte) 0x30, // READ — 4 pages starting at `page`
+                        (byte) page
+                });
+                if (chunk == null || chunk.length == 0) {
+                    throw new IOException("empty data");
+                }
+                out.write(chunk);
+            } catch (IOException e) {
+                String detail = e.getMessage() != null ? e.getMessage() : "unknown";
+                throw new IOException(
+                        "READ_PAGES page 0x" + Integer.toHexString(page)
+                                + " (range 0x" + Integer.toHexString(startPage)
+                                + "..0x" + Integer.toHexString(endPage) + "): " + detail,
+                        e
+                );
             }
-            byte[] chunk = ul.transceive(new byte[]{
-                    (byte) 0x30, // READ — 4 pages starting at `page`
-                    (byte) page
-            });
-            if (chunk == null || chunk.length == 0) {
-                throw new IOException("NTAG215 READ returned empty data at page 0x"
-                        + Integer.toHexString(page));
-            }
-            out.write(chunk);
         }
         return out.toByteArray();
     }
