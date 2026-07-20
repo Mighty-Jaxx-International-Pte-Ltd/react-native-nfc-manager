@@ -57,6 +57,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     // Use NFC reader mode instead of listening to a dispatch
     private Boolean isReaderModeEnabled = false;
     private Boolean enableReadNFC = false;
+    private volatile boolean verifyOriginalProcessing = false;
     private int readerModeFlags = 0;
     private NfcAdapter nfcAdapter = null;
     private Activity currentActivity = null;
@@ -106,6 +107,32 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         return writeNdefRequest != null || techRequest != null;
     }
 
+    private void disableVerifyOriginalReaderMode() {
+        if (!this.enableReadNFC) {
+            return;
+        }
+
+        Activity activity = getCurrentActivity();
+        if (activity == null) {
+            activity = this.currentActivity;
+        }
+
+        NfcAdapter adapter = this.nfcAdapter != null
+                ? this.nfcAdapter
+                : NfcAdapter.getDefaultAdapter(context);
+
+        if (adapter != null && activity != null && !activity.isFinishing()) {
+            try {
+                adapter.disableReaderMode(activity);
+            } catch (IllegalStateException ex) {
+                Log.w(LOG_TAG, "disableVerifyOriginalReaderMode failed", ex);
+            }
+        }
+
+        this.enableReadNFC = false;
+        this.verifyOriginalProcessing = false;
+    }
+
     @ReactMethod
     public void cancelTechnologyRequest(Callback callback) {
         synchronized(this) {
@@ -118,11 +145,10 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                     // connected tag, bypass this case explicitly
                 }
                 techRequest = null;
-                callback.invoke();
-            } else {
-                // explicitly allow this
-                callback.invoke();
             }
+
+            disableVerifyOriginalReaderMode();
+            callback.invoke();
         }
     }
 
@@ -1014,12 +1040,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
     @ReactMethod
     private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, final String verifySignature, Callback callback) {
-        if(this.enableReadNFC){
-            if(!currentActivity.isFinishing()) {
-                this.nfcAdapter.disableReaderMode(currentActivity);
-            }
-            this.enableReadNFC = false;
-        }
+        disableVerifyOriginalReaderMode();
         this.nfcAdapter = NfcAdapter.getDefaultAdapter(context);
         this.currentActivity = getCurrentActivity();
         if (nfcAdapter != null && currentActivity != null && !currentActivity.isFinishing()) {
@@ -1042,6 +1063,12 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                 nfcAdapter.enableReaderMode(currentActivity, new NfcAdapter.ReaderCallback() {
                     @Override
                     public void onTagDiscovered(Tag tag) {
+                        if (manager.verifyOriginalProcessing) {
+                            Log.w(LOG_TAG, "Ignoring duplicate tag while verify is in progress");
+                            return;
+                        }
+                        manager.verifyOriginalProcessing = true;
+                        try {
                         manager.tag = tag;
                         WritableMap nfcTag = Arguments.createMap();
                         byte[] pwd = hexToByteArray(password);
@@ -1056,15 +1083,13 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             nfcTag = tag2React(tag);
                         }
                         if (nfcTag != null && udid.isEmpty()) {
-                            MifareUltralight isoDep = MifareUltralight.get(tag);
-                            if (isoDep != null) {
-                                //verify signature
-                                try {
-                                    isoDep.connect();
-                                    isoDep.setTimeout(5000);
-                                    if (shouldVerifySignature(verifySignature)) {
+                            if (shouldVerifySignature(verifySignature)) {
+                                MifareUltralight isoDep = MifareUltralight.get(tag);
+                                if (isoDep != null) {
+                                    try {
+                                        isoDep.connect();
+                                        isoDep.setTimeout(NTAG215_TRANSCEIVE_TIMEOUT_MS);
                                         Boolean valid = Ev1SignatureCheck.doOriginalityCheck(isoDep, publicKey);
-                                        // signature ok
                                         if (valid) {
                                             step = 5;
                                             nfcTag.putString("messageError", "Chip is valid");
@@ -1074,38 +1099,41 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                             nfcTag.putString("messageError", Ev1SignatureCheck.message);
                                             sendEvent("NfcOriginalCheckError", nfcTag);
                                         }
-                                    } else {
-                                        step = 5;
-                                        nfcTag.putString("messageError", "Chip discovered");
-                                        sendEvent("NfcManagerDiscoverTag", nfcTag);
+                                        isoDep.close();
+                                    } catch (IOException e) {
+                                        nfcTag.putString("messageError", e.getMessage());
+                                        sendEvent("NfcOriginalCheckError", nfcTag);
+                                    } finally {
+                                        Log.w(LOG_TAG, "step: " + step);
                                     }
-                                    isoDep.close();
-                                } catch (IOException e) {
-                                    nfcTag.putString("messageError", e.getMessage());
-                                    sendEvent("NfcOriginalCheckError", nfcTag);
-                                } finally {
-                                    Log.w(LOG_TAG, "step: " + step);
                                 }
+                            } else {
+                                // Signature check disabled: use tag id from discovery only.
+                                // Avoids an extra connect/transceive that can trigger "Tag was lost".
+                                step = 5;
+                                nfcTag.putString("messageError", "Chip discovered");
+                                sendEvent("NfcManagerDiscoverTag", nfcTag);
                             }
                             return;
                         }
                         if(!bytesToHex(tag.getId()).toUpperCase().equals(udid.toUpperCase())){
                             nfcTag.putString("messageError", "udid is not correct:" + bytesToHex(tag.getId()).toUpperCase());
                             sendEvent("NfcOriginalCheckError", nfcTag);
+                            return;
                         }
                         MifareUltralight isoDep = MifareUltralight.get(tag);
                         if (isoDep != null) {
                             //verify signature
                             try {
                                 isoDep.connect();
-                                isoDep.setTimeout(8000);
+                                isoDep.setTimeout(NTAG215_TRANSCEIVE_TIMEOUT_MS);
                                 // case 1 checking password
                                 if(!password.isEmpty()) {
                                     // unlock with password
-                                    byte[] responseCheckPass1 = isoDep.transceive(new byte[]{
+                                    byte[] responseCheckPass1 = transceiveUltralightWithRetry(isoDep, new byte[]{
                                             (byte) 0x1B, // PWD_AUTH
                                             pwd[0], pwd[1], pwd[2], pwd[3]
-                                    });
+                                    }, NTAG215_TRANSCEIVE_TIMEOUT_MS);
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
                                         final byte[] userData = fastReadNtag215UserMemory(isoDep);
                                         step = 4;
@@ -1138,11 +1166,19 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             nfcTag.putString("messageError", "Cannot find chip");
                             sendEvent("NfcOriginalCheckError", nfcTag);
                         }
+                        } finally {
+                            manager.verifyOriginalProcessing = false;
+                            manager.disableVerifyOriginalReaderMode();
+                        }
                     }
                 }, NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B, readerModeExtras);
+                callback.invoke();
             } catch (IllegalStateException | NullPointerException e) {
                 Log.w(LOG_TAG, "Illegal State Exception starting NFC. Assuming application is terminating.");
+                callback.invoke(e.getMessage());
             }
+        } else {
+            callback.invoke("NFC not available");
         }
     }
 
@@ -1411,8 +1447,65 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
     private static final int NTAG215_FAST_READ_START_PAGE = 0x04;
     private static final int NTAG215_FAST_READ_END_PAGE = 0x31;
-    private static final int NTAG215_FAST_READ_CHUNK_PAGES = 0x0C; // 12 pages = 48 bytes
-    private static final int NTAG215_FAST_READ_MAX_RETRIES = 3;
+    private static final int NTAG215_READ_BLOCK_PAGES = 4;
+    private static final int NTAG215_TRANSCEIVE_TIMEOUT_MS = 10000;
+    private static final int NTAG215_INTER_COMMAND_DELAY_MS = 80;
+    private static final int NTAG215_TRANSCEIVE_MAX_RETRIES = 4;
+
+    private static void sleepBriefly(int ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void ensureUltralightConnected(MifareUltralight ul, int timeoutMs) throws IOException {
+        if (!ul.isConnected()) {
+            ul.connect();
+        }
+        ul.setTimeout(timeoutMs);
+    }
+
+    private static byte[] transceiveUltralightWithRetry(
+            MifareUltralight ul,
+            byte[] command,
+            int timeoutMs
+    ) throws IOException {
+        IOException lastError = null;
+        for (int attempt = 0; attempt < NTAG215_TRANSCEIVE_MAX_RETRIES; attempt++) {
+            try {
+                ensureUltralightConnected(ul, timeoutMs);
+                return ul.transceive(command);
+            } catch (IOException error) {
+                lastError = error;
+                if (!isTagConnectionLost(error) || attempt == NTAG215_TRANSCEIVE_MAX_RETRIES - 1) {
+                    throw error;
+                }
+                Log.w(LOG_TAG, "NTAG215 transceive lost tag, retry " + (attempt + 1));
+                try {
+                    ul.close();
+                } catch (Exception ignored) {
+                }
+                sleepBriefly(NTAG215_INTER_COMMAND_DELAY_MS);
+            }
+        }
+        throw lastError != null ? lastError : new IOException("NTAG215 transceive failed");
+    }
+
+    private static byte[] readUltralightPages(
+            MifareUltralight ul,
+            int startPage,
+            int timeoutMs
+    ) throws IOException {
+        byte[] response = transceiveUltralightWithRetry(
+                ul,
+                new byte[]{(byte) 0x30, (byte) startPage},
+                timeoutMs
+        );
+        sleepBriefly(NTAG215_INTER_COMMAND_DELAY_MS);
+        return response;
+    }
 
     private static int ntag215EndPageForPayloadLength(int payloadLength) {
         if (payloadLength <= 0 || payloadLength > NTAG215_MAX_PAYLOAD_BYTES) {
@@ -1437,41 +1530,16 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         String lower = message.toLowerCase(Locale.US);
         return lower.contains("tag was lost")
                 || lower.contains("tag is out of date")
-                || lower.contains("connection lost");
-    }
-
-    private static byte[] transceiveFastReadWithRetry(MifareUltralight ul, int startPage, int endPage) throws IOException {
-        IOException lastError = null;
-        for (int attempt = 0; attempt < NTAG215_FAST_READ_MAX_RETRIES; attempt++) {
-            try {
-                return ul.transceive(new byte[]{
-                        (byte) 0x3A, // FAST_READ
-                        (byte) startPage,
-                        (byte) endPage
-                });
-            } catch (IOException error) {
-                lastError = error;
-                if (!isTagConnectionLost(error) || attempt == NTAG215_FAST_READ_MAX_RETRIES - 1) {
-                    throw error;
-                }
-                Log.w(LOG_TAG, "NTAG215 FAST_READ lost connection pages "
-                        + startPage + "-" + endPage + ", retry " + (attempt + 1));
-                try {
-                    Thread.sleep(40);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw error;
-                }
-            }
-        }
-        throw lastError != null ? lastError : new IOException("NTAG215 FAST_READ failed");
+                || lower.contains("connection lost")
+                || lower.contains("nfc was lost");
     }
 
     private static byte[] fastReadNtag215UserMemory(MifareUltralight ul) throws IOException {
-        // Read a short header first, then only the pages required by the length prefix.
-        byte[] header = transceiveFastReadWithRetry(ul, NTAG215_FAST_READ_START_PAGE, 0x07);
+        // Use 4-page READ commands instead of large FAST_READ transfers; more stable on Android.
+        final int timeoutMs = NTAG215_TRANSCEIVE_TIMEOUT_MS;
+        byte[] header = readUltralightPages(ul, NTAG215_FAST_READ_START_PAGE, timeoutMs);
         if (header == null || header.length < NTAG215_USER_DATA_LENGTH_BYTES) {
-            throw new IOException("NTAG215 header FAST_READ returned empty data");
+            throw new IOException("NTAG215 header READ returned empty data");
         }
 
         int payloadLength = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
@@ -1482,13 +1550,11 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(header);
-        for (int start = 0x08; start <= endPage; ) {
-            int chunkEnd = Math.min(start + NTAG215_FAST_READ_CHUNK_PAGES - 1, endPage);
-            byte[] chunk = transceiveFastReadWithRetry(ul, start, chunkEnd);
+        for (int start = 0x08; start <= endPage; start += NTAG215_READ_BLOCK_PAGES) {
+            byte[] chunk = readUltralightPages(ul, start, timeoutMs);
             if (chunk != null && chunk.length > 0) {
                 out.write(chunk);
             }
-            start = chunkEnd + 1;
         }
         return out.toByteArray();
     }
