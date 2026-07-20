@@ -38,7 +38,6 @@ import android.os.Bundle;
 import org.json.JSONObject;
 import org.json.JSONException;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -1125,9 +1124,13 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     });
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
                                         step = 3;
-                                        stepName = "READ_PAGES";
-                                        // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
-                                        final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
+                                        stepName = "FAST_READ";
+                                        // Same as master: single FAST_READ (0x3A) pages 0x06..0x31
+                                        final byte[] userData = isoDep.transceive(new byte[]{
+                                                (byte) 0x3A, // FAST_READ
+                                                (byte) 0x06, // start page address
+                                                (byte) 0x31  // end page address
+                                        });
                                         step = 4;
                                         stepName = "DECODE";
                                         ndfMessage = new String(userData, "UTF-8");
@@ -1146,9 +1149,13 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
 
                                 }else{
                                     step = 3;
-                                    stepName = "READ_PAGES";
-                                    // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
-                                    final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
+                                    stepName = "FAST_READ";
+                                    // Same as master: single FAST_READ (0x3A) pages 0x06..0x31
+                                    final byte[] userData = isoDep.transceive(new byte[]{
+                                            (byte) 0x3A, // FAST_READ
+                                            (byte) 0x06, // start page address
+                                            (byte) 0x31  // end page address
+                                    });
                                     step = 4;
                                     stepName = "DECODE";
                                     ndfMessage = new String(userData, "UTF-8");
@@ -1190,49 +1197,6 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         return verifySignature == null
                 || verifySignature.isEmpty()
                 || "YES".equalsIgnoreCase(verifySignature);
-    }
-
-    // NTAG215 READ (0x30) returns 4 pages (16 bytes) starting at the given page.
-    private static final int NTAG215_READ_PAGES_PER_CMD = 4;
-
-    /**
-     * Read NTAG215 user memory page-by-page using READ (0x30) instead of FAST_READ (0x3A).
-     * Large single FAST_READ transfers frequently cause "Transceive failed" on Android.
-     */
-    private static byte[] readNtag215PagesByPage(
-            MifareUltralight ul,
-            int startPage,
-            int endPage
-    ) throws IOException {
-        if (startPage < 0 || endPage < startPage) {
-            throw new IOException("Invalid NTAG215 page range: " + startPage + ".." + endPage);
-        }
-
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (int page = startPage; page <= endPage; page += NTAG215_READ_PAGES_PER_CMD) {
-            try {
-                if (!ul.isConnected()) {
-                    ul.connect();
-                }
-                byte[] chunk = ul.transceive(new byte[]{
-                        (byte) 0x30, // READ — 4 pages starting at `page`
-                        (byte) page
-                });
-                if (chunk == null || chunk.length == 0) {
-                    throw new IOException("empty data");
-                }
-                out.write(chunk);
-            } catch (IOException e) {
-                String detail = e.getMessage() != null ? e.getMessage() : "unknown";
-                throw new IOException(
-                        "READ_PAGES page 0x" + Integer.toHexString(page)
-                                + " (range 0x" + Integer.toHexString(startPage)
-                                + "..0x" + Integer.toHexString(endPage) + "): " + detail,
-                        e
-                );
-            }
-        }
-        return out.toByteArray();
     }
 
     private PendingIntent getPendingIntent() {
