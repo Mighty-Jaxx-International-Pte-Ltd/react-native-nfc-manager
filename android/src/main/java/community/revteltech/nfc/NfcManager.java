@@ -38,6 +38,7 @@ import android.os.Bundle;
 import org.json.JSONObject;
 import org.json.JSONException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -1097,7 +1098,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             //verify signature
                             try {
                                 isoDep.connect();
-                                isoDep.setTimeout(5000);
+                                isoDep.setTimeout(8000);
                                 // case 1 checking password
                                 if(!password.isEmpty()) {
                                     // unlock with password
@@ -1106,11 +1107,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                             pwd[0], pwd[1], pwd[2], pwd[3]
                                     });
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
-                                        final byte[] userData = isoDep.transceive(new byte[]{
-                                                (byte) 0x3A, // FAST_READ
-                                                (byte) 0x04,// start page address
-                                                (byte) 0x31// end page address
-                                        });
+                                        final byte[] userData = fastReadNtag215UserMemory(isoDep);
                                         step = 4;
                                         ndfMessage = decodeNtag215UserData(userData);
                                         nfcTag.putString("ndfMessage", ndfMessage);
@@ -1122,12 +1119,8 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     }
 
                                 }else{
-                                    //fast read data
-                                    final byte[] userData = isoDep.transceive(new byte[]{
-                                            (byte) 0x3A, // FAST_READ
-                                            (byte) 0x04,// start page address
-                                            (byte) 0x31// end page address
-                                    });
+                                    // Chunked FAST_READ — large 0x04..0x31 single transfers often lose the tag.
+                                    final byte[] userData = fastReadNtag215UserMemory(isoDep);
                                     step = 4;
                                     ndfMessage = decodeNtag215UserData(userData);
                                     nfcTag.putString("ndfMessage", ndfMessage);
@@ -1414,6 +1407,92 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     private static final int NTAG215_USER_DATA_LENGTH_BYTES = 2;
     private static final int NTAG215_USER_DATA_PAYLOAD_OFFSET = 8;
     private static final int NTAG215_MAX_PAYLOAD_BYTES = 502;
+
+
+    private static final int NTAG215_FAST_READ_START_PAGE = 0x04;
+    private static final int NTAG215_FAST_READ_END_PAGE = 0x31;
+    private static final int NTAG215_FAST_READ_CHUNK_PAGES = 0x0C; // 12 pages = 48 bytes
+    private static final int NTAG215_FAST_READ_MAX_RETRIES = 3;
+
+    private static int ntag215EndPageForPayloadLength(int payloadLength) {
+        if (payloadLength <= 0 || payloadLength > NTAG215_MAX_PAYLOAD_BYTES) {
+            return NTAG215_FAST_READ_END_PAGE;
+        }
+        int bytesNeeded = Math.max(
+                NTAG215_USER_DATA_LENGTH_BYTES + payloadLength,
+                NTAG215_USER_DATA_PAYLOAD_OFFSET + payloadLength
+        );
+        int pagesNeeded = (bytesNeeded + 3) / 4;
+        return Math.min(NTAG215_FAST_READ_END_PAGE, NTAG215_FAST_READ_START_PAGE + pagesNeeded - 1);
+    }
+
+    private static boolean isTagConnectionLost(IOException error) {
+        if (error instanceof TagLostException) {
+            return true;
+        }
+        String message = error.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.US);
+        return lower.contains("tag was lost")
+                || lower.contains("tag is out of date")
+                || lower.contains("connection lost");
+    }
+
+    private static byte[] transceiveFastReadWithRetry(MifareUltralight ul, int startPage, int endPage) throws IOException {
+        IOException lastError = null;
+        for (int attempt = 0; attempt < NTAG215_FAST_READ_MAX_RETRIES; attempt++) {
+            try {
+                return ul.transceive(new byte[]{
+                        (byte) 0x3A, // FAST_READ
+                        (byte) startPage,
+                        (byte) endPage
+                });
+            } catch (IOException error) {
+                lastError = error;
+                if (!isTagConnectionLost(error) || attempt == NTAG215_FAST_READ_MAX_RETRIES - 1) {
+                    throw error;
+                }
+                Log.w(LOG_TAG, "NTAG215 FAST_READ lost connection pages "
+                        + startPage + "-" + endPage + ", retry " + (attempt + 1));
+                try {
+                    Thread.sleep(40);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw error;
+                }
+            }
+        }
+        throw lastError != null ? lastError : new IOException("NTAG215 FAST_READ failed");
+    }
+
+    private static byte[] fastReadNtag215UserMemory(MifareUltralight ul) throws IOException {
+        // Read a short header first, then only the pages required by the length prefix.
+        byte[] header = transceiveFastReadWithRetry(ul, NTAG215_FAST_READ_START_PAGE, 0x07);
+        if (header == null || header.length < NTAG215_USER_DATA_LENGTH_BYTES) {
+            throw new IOException("NTAG215 header FAST_READ returned empty data");
+        }
+
+        int payloadLength = ((header[0] & 0xff) << 8) | (header[1] & 0xff);
+        int endPage = ntag215EndPageForPayloadLength(payloadLength);
+        if (endPage <= 0x07) {
+            return header;
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(header);
+        for (int start = 0x08; start <= endPage; ) {
+            int chunkEnd = Math.min(start + NTAG215_FAST_READ_CHUNK_PAGES - 1, endPage);
+            byte[] chunk = transceiveFastReadWithRetry(ul, start, chunkEnd);
+            if (chunk != null && chunk.length > 0) {
+                out.write(chunk);
+            }
+            start = chunkEnd + 1;
+        }
+        return out.toByteArray();
+    }
+
 
     private static byte[] trimTrailingNullBytes(byte[] data) {
         int end = data.length;

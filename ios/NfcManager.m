@@ -124,6 +124,39 @@ static void nfcSafeExecute(RCTResponseSenderBlock callback, void (^block)(void))
     }
 }
 
+static const uint8_t NTAG215_FAST_READ_START_PAGE = 0x04;
+static const uint8_t NTAG215_FAST_READ_END_PAGE = 0x31;
+static const uint8_t NTAG215_FAST_READ_CHUNK_PAGES = 0x0C; // 12 pages = 48 bytes
+static const NSInteger NTAG215_FAST_READ_MAX_RETRIES = 2;
+
+static BOOL isNfcTagConnectionLostError(NSError *error) {
+    if (error == nil) {
+        return NO;
+    }
+    // NFCReaderTransceiveErrorTagConnectionLost == 100
+    if (error.code == 100) {
+        return YES;
+    }
+    NSError *underlying = error.userInfo[NSUnderlyingErrorKey];
+    return underlying != nil && underlying.code == 100;
+}
+
+static uint8_t ntag215EndPageForPayloadLength(NSUInteger payloadLength) {
+    if (payloadLength == 0 || payloadLength > NTAG215_MAX_PAYLOAD_BYTES) {
+        return NTAG215_FAST_READ_END_PAGE;
+    }
+    NSUInteger bytesNeeded = MAX(
+        NTAG215_USER_DATA_LENGTH_BYTES + payloadLength,
+        NTAG215_USER_DATA_PAYLOAD_OFFSET + payloadLength
+    );
+    NSUInteger pagesNeeded = (bytesNeeded + 3) / 4;
+    NSUInteger endPage = NTAG215_FAST_READ_START_PAGE + pagesNeeded - 1;
+    if (endPage > NTAG215_FAST_READ_END_PAGE) {
+        return NTAG215_FAST_READ_END_PAGE;
+    }
+    return (uint8_t)endPage;
+}
+
 @implementation NfcManager {
     NSDictionary *nfcTechTypes;
     NSArray *techRequestTypes;
@@ -718,6 +751,106 @@ RCT_EXPORT_METHOD(sendMifareCommand:(NSArray *)bytes callback: (nonnull RCTRespo
     });
 }
 
+
+- (void)sendMiFareCommandWithRetry:(NSData *)command
+                             toTag:(id<NFCMiFareTag>)tag
+                           retries:(NSInteger)retriesLeft
+                        completion:(void (^)(NSData *response, NSError *error))completion API_AVAILABLE(ios(13.0))
+{
+    __weak NfcManager *weakSelf = self;
+    [tag sendMiFareCommand:command
+         completionHandler:^(NSData *response, NSError *error) {
+        if (error && isNfcTagConnectionLostError(error) && retriesLeft > 0) {
+            NSLog(@"NFC FAST_READ/command lost connection, retrying (%ld left)", (long)retriesLeft);
+            [weakSelf sendMiFareCommandWithRetry:command
+                                           toTag:tag
+                                         retries:retriesLeft - 1
+                                      completion:completion];
+            return;
+        }
+        if (completion) {
+            completion(response, error);
+        }
+    }];
+}
+
+- (void)fastReadNtag215PagesFrom:(uint8_t)startPage
+                              to:(uint8_t)endPage
+                           onTag:(id<NFCMiFareTag>)tag
+                     accumulated:(NSMutableData *)accumulated
+                      completion:(void (^)(NSData *data, NSError *error))completion API_AVAILABLE(ios(13.0))
+{
+    if (startPage > endPage) {
+        if (completion) {
+            completion(accumulated, nil);
+        }
+        return;
+    }
+
+    uint8_t chunkEnd = (uint8_t)MIN((int)startPage + NTAG215_FAST_READ_CHUNK_PAGES - 1, (int)endPage);
+    uint8_t cmdBytes[3] = { 0x3A, startPage, chunkEnd };
+    NSData *command = [NSData dataWithBytes:cmdBytes length:3];
+    __weak NfcManager *weakSelf = self;
+
+    [self sendMiFareCommandWithRetry:command
+                               toTag:tag
+                             retries:NTAG215_FAST_READ_MAX_RETRIES
+                          completion:^(NSData *response, NSError *error) {
+        if (error) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+        if (response.length > 0) {
+            [accumulated appendData:response];
+        }
+        [weakSelf fastReadNtag215PagesFrom:(uint8_t)(chunkEnd + 1)
+                                        to:endPage
+                                     onTag:tag
+                               accumulated:accumulated
+                                completion:completion];
+    }];
+}
+
+- (void)fastReadNtag215UserMemoryOnTag:(id<NFCMiFareTag>)tag
+                            completion:(void (^)(NSData *data, NSError *error))completion API_AVAILABLE(ios(13.0))
+{
+    NSMutableData *headerAcc = [NSMutableData data];
+    __weak NfcManager *weakSelf = self;
+    // Header first (pages 4-7) so we only pull as many pages as the payload needs.
+    [self fastReadNtag215PagesFrom:NTAG215_FAST_READ_START_PAGE
+                                to:0x07
+                             onTag:tag
+                       accumulated:headerAcc
+                        completion:^(NSData *header, NSError *error) {
+        if (error || header.length < NTAG215_USER_DATA_LENGTH_BYTES) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+
+        const uint8_t *bytes = header.bytes;
+        NSUInteger payloadLength = ((NSUInteger)bytes[0] << 8) | bytes[1];
+        uint8_t endPage = ntag215EndPageForPayloadLength(payloadLength);
+
+        if (endPage <= 0x07) {
+            if (completion) {
+                completion(header, nil);
+            }
+            return;
+        }
+
+        NSMutableData *acc = [NSMutableData dataWithData:header];
+        [weakSelf fastReadNtag215PagesFrom:0x08
+                                        to:endPage
+                                     onTag:tag
+                               accumulated:acc
+                                completion:completion];
+    }];
+}
+
 RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)password :(NSString *)packString :(NSString *)udid :(NSString *) nfcPasswordProtection callback: (nonnull RCTResponseSenderBlock)callback)
 {
     nfcSafeExecute(callback, ^{
@@ -727,71 +860,64 @@ RCT_EXPORT_METHOD(verifyOriginalCheckNtag215:(NSString *)publicKey :(NSString *)
             if (sessionEx.connectedTag) {
                 id<NFCMiFareTag> mifareTag = [sessionEx.connectedTag asNFCMiFareTag];
                 NSString *udidTag  = [mifareTag.identifier hexString];
-                float sleepTime = 0.5;
                 if(![[udid uppercaseString] isEqualToString:[udidTag uppercaseString]]){
                     callback(@[[NSNull null], @"ERROR  595"]);
                     [sessionEx invalidateSession];
                     return;
                 }
                 if (mifareTag) {
+                    void (^finishWithUserData)(NSData *userData, NSError *error, NSString *errorCode) = ^(NSData *userData, NSError *error, NSString *errorCode) {
+                        if (error) {
+                            callback(@[getErrorMessage(error), errorCode ?: [NSNull null]]);
+                            [sessionEx invalidateSession];
+                            return;
+                        }
+                        NSString *encryptedString = decodeNtag215UserData(userData);
+                        [resultChecking setValue:encryptedString forKey:@"encryptedString"];
+                        callback(@[[NSNull null],  resultChecking]);
+                        [sessionEx invalidateSession];
+                    };
+
                     if(password.length > 0){
-                        // meant need to try to use password first
+                        // Unlock with password, then chunked FAST_READ (avoids NFCError 100 on large single reads).
                         NSData *readSetting = [NSData dataWithHexString:[NSString stringWithFormat:@"1B%@",password]];
                         NSLog(@"input bytes: %@", [readSetting hexString]);
-                        sleep(sleepTime);
-                        [mifareTag sendMiFareCommand:readSetting
-                                   completionHandler:^(NSData *responseSetting, NSError *error) {
+                        [self sendMiFareCommandWithRetry:readSetting
+                                                   toTag:mifareTag
+                                                 retries:NTAG215_FAST_READ_MAX_RETRIES
+                                              completion:^(NSData *responseSetting, NSError *error) {
                             if (error) {
                                 callback(@[getErrorMessage(error), @"ERROR  595"]);
                                 [sessionEx invalidateSession];
-                            } else {
-                                if(responseSetting.length == 1){
-                                    callback(@[getErrorMessage(error), @"ERROR  595"]);
-                                    [sessionEx invalidateSession];
-                                    return;
-                                }
-                                // read user data
-                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0431"];
-                                sleep(sleepTime);
-                                [mifareTag sendMiFareCommand:commandReadUserData
-                                       completionHandler:^(NSData *userData, NSError *error) {
-                                    if (error) {
-                                        callback(@[getErrorMessage(error), @"ERROR  632"]);
-                                        [sessionEx invalidateSession];
-                                    } else {
-                                        NSString *encryptedString = decodeNtag215UserData(userData);
-                                        [resultChecking setValue:encryptedString forKey:@"encryptedString"];
-                                        callback(@[[NSNull null],  resultChecking]);
-                                        [sessionEx invalidateSession];
-                                    }
-                                }];
+                                return;
                             }
+                            if(responseSetting.length == 1){
+                                callback(@[getErrorMessage(error), @"ERROR  595"]);
+                                [sessionEx invalidateSession];
+                                return;
+                            }
+                            [self fastReadNtag215UserMemoryOnTag:mifareTag
+                                                      completion:^(NSData *userData, NSError *readError) {
+                                finishWithUserData(userData, readError, @"ERROR  632");
+                            }];
                         }];
                     }else{
+                        // Optional originality read, then chunked FAST_READ.
                         NSData *data = [NSData dataWithHexString:@"3C00"];
                         NSLog(@"input bytes: %@", getHexString(data));
-                        sleep(sleepTime);
-                        [mifareTag sendMiFareCommand:data
-                                   completionHandler:^(NSData *response, NSError *error) {
+                        [self sendMiFareCommandWithRetry:data
+                                                   toTag:mifareTag
+                                                 retries:NTAG215_FAST_READ_MAX_RETRIES
+                                              completion:^(NSData *response, NSError *error) {
                             if (error) {
                                 callback(@[getErrorMessage(error), [NSNull null]]);
                                 [sessionEx invalidateSession];
-                            } else {
-                                NSData *commandReadUserData = [NSData dataWithHexString:@"3A0431"];
-                                sleep(sleepTime);
-                                [mifareTag sendMiFareCommand:commandReadUserData
-                                       completionHandler:^(NSData *userData, NSError *error) {
-                                    if (error) {
-                                        callback(@[[NSNull null],  @"3A0431 ERROR AT 586"]);
-                                        [sessionEx invalidateSession];
-                                    } else {
-                                       NSString *encryptedString = decodeNtag215UserData(userData);
-                                       [resultChecking setValue:encryptedString forKey:@"encryptedString"];
-                                       callback(@[[NSNull null],  resultChecking]);
-                                       [sessionEx invalidateSession];
-                                    }
-                                }];
+                                return;
                             }
+                            [self fastReadNtag215UserMemoryOnTag:mifareTag
+                                                      completion:^(NSData *userData, NSError *readError) {
+                                finishWithUserData(userData, readError, @"3A0431 ERROR AT 586");
+                            }];
                         }];
                     }
                     return;
