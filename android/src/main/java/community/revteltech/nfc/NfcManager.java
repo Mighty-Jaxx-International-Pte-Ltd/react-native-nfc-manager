@@ -38,6 +38,7 @@ import android.os.Bundle;
 import org.json.JSONObject;
 import org.json.JSONException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -1090,6 +1091,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                         if(!bytesToHex(tag.getId()).toUpperCase().equals(udid.toUpperCase())){
                             nfcTag.putString("messageError", "udid is not correct:" + bytesToHex(tag.getId()).toUpperCase());
                             sendEvent("NfcOriginalCheckError", nfcTag);
+                            return;
                         }
                         MifareUltralight isoDep = MifareUltralight.get(tag);
                         if (isoDep != null) {
@@ -1105,11 +1107,8 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                             pwd[0], pwd[1], pwd[2], pwd[3]
                                     });
                                     if ((responseCheckPass1 != null) && (responseCheckPass1.length >= 2)) {
-                                        final byte[] userData = isoDep.transceive(new byte[]{
-                                                (byte) 0x3A, // READ
-                                                (byte) 0x06,// start page address
-                                                (byte) 0x31// end page address
-                                        });
+                                        // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
+                                        final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
                                         step = 4;
                                         ndfMessage = new String(userData, "UTF-8");
                                         nfcTag.putString("ndfMessage", ndfMessage);
@@ -1121,12 +1120,8 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                                     }
 
                                 }else{
-                                    //fast read data
-                                    final byte[] userData = isoDep.transceive(new byte[]{
-                                            (byte) 0x3A, // READ
-                                            (byte) 0x06,// start page address
-                                            (byte) 0x31// end page address
-                                    });
+                                    // Page-by-page READ (0x30), avoid large FAST_READ (0x3A) which fails on Android.
+                                    final byte[] userData = readNtag215PagesByPage(isoDep, 0x06, 0x31);
                                     step = 4;
                                     ndfMessage = new String(userData, "UTF-8");
                                     nfcTag.putString("ndfMessage", ndfMessage);
@@ -1160,6 +1155,40 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
         return verifySignature == null
                 || verifySignature.isEmpty()
                 || "YES".equalsIgnoreCase(verifySignature);
+    }
+
+    // NTAG215 READ (0x30) returns 4 pages (16 bytes) starting at the given page.
+    private static final int NTAG215_READ_PAGES_PER_CMD = 4;
+
+    /**
+     * Read NTAG215 user memory page-by-page using READ (0x30) instead of FAST_READ (0x3A).
+     * Large single FAST_READ transfers frequently cause "Transceive failed" on Android.
+     */
+    private static byte[] readNtag215PagesByPage(
+            MifareUltralight ul,
+            int startPage,
+            int endPage
+    ) throws IOException {
+        if (startPage < 0 || endPage < startPage) {
+            throw new IOException("Invalid NTAG215 page range: " + startPage + ".." + endPage);
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (int page = startPage; page <= endPage; page += NTAG215_READ_PAGES_PER_CMD) {
+            if (!ul.isConnected()) {
+                ul.connect();
+            }
+            byte[] chunk = ul.transceive(new byte[]{
+                    (byte) 0x30, // READ — 4 pages starting at `page`
+                    (byte) page
+            });
+            if (chunk == null || chunk.length == 0) {
+                throw new IOException("NTAG215 READ returned empty data at page 0x"
+                        + Integer.toHexString(page));
+            }
+            out.write(chunk);
+        }
+        return out.toByteArray();
     }
 
     private PendingIntent getPendingIntent() {
