@@ -1012,7 +1012,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
     }
 
     @ReactMethod
-    private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, Callback callback) {
+    private void verifyOriginalCheckNtag215Android(final String publicKey, final String password, final String packString, final String udid, final String verifySignature, Callback callback) {
         if(this.enableReadNFC){
             if(!currentActivity.isFinishing()) {
                 this.nfcAdapter.disableReaderMode(currentActivity);
@@ -1025,7 +1025,7 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
             final NfcManager manager = this;
             WritableMap nfcTag1 = Arguments.createMap();
             try {
-                if (publicKey.isEmpty()) {
+                if (publicKey.isEmpty() && shouldVerifySignature(verifySignature)) {
                     nfcTag1.putString("messageError", "There is no public key");
                     sendEvent("NfcOriginalCheckError", nfcTag1);
                 }
@@ -1055,6 +1055,11 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                             nfcTag = tag2React(tag);
                         }
                         if (nfcTag != null && udid.isEmpty()) {
+                            if (!shouldVerifySignature(verifySignature)) {
+                                nfcTag.putString("messageError", "Chip discovered");
+                                sendEvent("NfcManagerDiscoverTag", nfcTag);
+                                return;
+                            }
                             MifareUltralight isoDep = MifareUltralight.get(tag);
                             if (isoDep != null) {
                                 //verify signature
@@ -1141,10 +1146,20 @@ class NfcManager extends ReactContextBaseJavaModule implements ActivityEventList
                         }
                     }
                 }, NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_NFC_B, readerModeExtras);
+                callback.invoke();
             } catch (IllegalStateException | NullPointerException e) {
                 Log.w(LOG_TAG, "Illegal State Exception starting NFC. Assuming application is terminating.");
+                callback.invoke(e.getMessage());
             }
+        } else {
+            callback.invoke("NFC not available");
         }
+    }
+
+    private boolean shouldVerifySignature(final String verifySignature) {
+        return verifySignature == null
+                || verifySignature.isEmpty()
+                || "YES".equalsIgnoreCase(verifySignature);
     }
 
     private PendingIntent getPendingIntent() {

@@ -88,6 +88,8 @@ declare module 'react-native-nfc-manager' {
     le: number;
   }
 
+  type NfcVerifySignatureOption = 'YES' | 'NO';
+
   /** [iOS ONLY] */
   interface Iso15693HandlerIOS {
     getSystemInfo: (
@@ -120,7 +122,7 @@ declare module 'react-native-nfc-manager' {
 
     setEventListener(name: NfcEvents, callback: OnNfcEvents | null): void;
 
-    requestTechnology: (tech: NfcTech, detectPassword: string) => Promise<any>;
+    requestTechnology: (tech: NfcTech, detectPassword: string, options?: { verifySignature?: NfcVerifySignatureOption }) => Promise<any>;
 
     cancelTechnologyRequest: () => Promise<void>;
 
@@ -162,7 +164,7 @@ declare module 'react-native-nfc-manager' {
     /** [ANDROID ONLY] */
     makeReadOnlyAndroid: () => Promise<boolean>;
     /** [ANDROID ONLY] */
-    verifyOriginalCheckNtag215Android(publicKey: string, password: string, packString: string, udid: string): Promise<number[]>;
+    verifyOriginalCheckNtag215Android(publicKey: string, password: string, packString: string, udid: string, verifySignature?: NfcVerifySignatureOption): Promise<number[]>;
     /** [ANDROID ONLY] */
     transceive(bytes: number[]): Promise<number[]>;
     /** [ANDROID ONLY] */

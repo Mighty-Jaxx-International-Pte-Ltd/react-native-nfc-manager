@@ -38,6 +38,7 @@ NSString* getErrorMessage(NSError *error) {
     NSDictionary *nfcTechTypes;
     NSArray *techRequestTypes;
     NSString *detectPasswordInRequestTech;
+    NSString *verifySignatureInRequestTech;
     RCTResponseSenderBlock techRequestCallback;
     id<NFCNDEFTag> connectedNdefTag;
 }
@@ -74,6 +75,7 @@ RCT_EXPORT_MODULE()
     session = nil;
     sessionEx = nil;
     techRequestTypes = nil;
+    verifySignatureInRequestTech = nil;
     techRequestCallback = nil;
     connectedNdefTag = nil;
 }
@@ -237,6 +239,14 @@ RCT_EXPORT_MODULE()
                                 return;
                             }
                           id<NFCMiFareTag> mifareTag = [sessionEx.connectedTag asNFCMiFareTag];
+                          if ([@"NO" caseInsensitiveCompare:verifySignatureInRequestTech ?: @"YES"] == NSOrderedSame) {
+                              NSMutableDictionary *tagInfo = @{}.mutableCopy;
+                              [tagInfo setObject:getHexString(mifareTag.identifier) forKey:@"id"];
+                              [tagInfo setValue:requestType forKey:@"requestType"];
+                              [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
+                              pendingCallback(@[[NSNull null], tagInfo]);
+                              return;
+                          }
                           NSData *data = [NSData dataWithHexString:@"3C00"];
                           NSLog(@"input bytes: %@", getHexString(data));
                           [mifareTag sendMiFareCommand:data
@@ -262,7 +272,7 @@ RCT_EXPORT_MODULE()
                                         [tagInfo setValue:@"NO" forKey:@"passwordProtection"];
                                         pendingCallback(@[[NSNull null], tagInfo]);
                                       }else{
-                                          pendingCallback(@[getErrorMessage(error)]);
+                                          pendingCallback(@[@"Invalid signature"]);
                                           return;
                                       }
                                   }
@@ -336,7 +346,7 @@ RCT_EXPORT_METHOD(start: (nonnull RCTResponseSenderBlock)callback)
     callback(@[@"Not support in this device", [NSNull null]]);
 }
 
-RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword callback:(nonnull RCTResponseSenderBlock)callback)
+RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPassword :(NSString *)verifySignature callback:(nonnull RCTResponseSenderBlock)callback)
 {
     if (sessionEx == nil) {
         callback(@[@"you need to call registerTagEventEx first", [NSNull null]]);
@@ -345,6 +355,7 @@ RCT_EXPORT_METHOD(requestTechnology: (NSArray *)techs :(NSString *)detectPasswor
     if (techRequestCallback == nil) {
         techRequestTypes = techs;
         detectPasswordInRequestTech = detectPassword;
+        verifySignatureInRequestTech = verifySignature ?: @"YES";
         techRequestCallback = callback;
     } else {
         callback(@[@"duplicate tech request, please call cancelTechnologyRequest to cancel previous one", [NSNull null]]);
